@@ -1,0 +1,61 @@
+{
+  "name": "steercode-project",
+  "slug": "steercode-project",
+  "version": "1.0.0",
+  "orientation": "portrait",
+  "icon": "./assets/images/icon.png",
+  "scheme": "myapp",
+  "userInterfaceStyle": "automatic",
+  "newArchEnabled": true,
+  "ios": {
+    "supportsTablet": true,
+    "infoPlist": {
+      "NSCameraUsageDescription": "This app uses the camera to capture photos of vehicles during purchase creation.",
+      "NSPhotoLibraryUsageDescription": "This app accesses the photo library to select vehicle photos during purchase creation."
+    }
+  },
+  "android": {
+    "adaptiveIcon": {
+      "foregroundImage": "./assets/images/adaptive-icon.png",
+      "backgroundColor": "#ffffff"
+    },
+    "edgeToEdgeEnabled": true,
+    "permissions": [
+      "android.permission.CAMERA",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.WRITE_EXTERNAL_STORAGE"
+    ]
+  },
+  "web": {
+    "bundler": "metro",
+    "output": "single",
+    "favicon": "./assets/images/favicon.png"
+  },
+  "plugins": [
+    "expo-router",
+    [
+      "expo-splash-screen",
+      {
+        "image": "./assets/images/splash-icon.png",
+        "imageWidth": 200,
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      }
+    ],
+    [
+      "expo-camera",
+      {
+        "cameraPermission": "Allow AutoHity to access your camera to capture vehicle photos during purchase creation."
+      }
+    ],
+    [
+      "expo-image-picker",
+      {
+        "photosPermission": "Allow AutoHity to access your photo library to select vehicle photos during purchase creation."
+      }
+    ]
+  ],
+  "experiments": {
+    "typedRoutes": true
+  }
+}
