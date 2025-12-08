@@ -7,6 +7,10 @@ import {
   Text,
   Image,
   Alert,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -16,6 +20,8 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { PurchaseState, ClientType } from '@/constants/types';
 import { mockEmployees } from '@/constants/mockData';
 import { ImageGallery } from '@/components/ImageGallery';
+import { DatePickerField } from '@/components/DatePickerField';
+import { formatSpz } from '@/components/SpzInput';
 
 const STATUS_OPTIONS: Record<string, { label: string; color: string }> = {
   excellent: { label: 'Výborné', color: '#34C759' },
@@ -25,11 +31,47 @@ const STATUS_OPTIONS: Record<string, { label: string; color: string }> = {
   damaged: { label: 'Poškozené', color: '#FF3B30' },
 };
 
+// Country codes for phone display
+const COUNTRY_CODES = [
+  { code: '+420', flag: '🇨🇿' },
+  { code: '+421', flag: '🇸🇰' },
+  { code: '+43', flag: '🇦🇹' },
+  { code: '+49', flag: '🇩🇪' },
+  { code: '+48', flag: '🇵🇱' },
+  { code: '+36', flag: '🇭🇺' },
+  { code: '+31', flag: '🇳🇱' },
+  { code: '+32', flag: '🇧🇪' },
+  { code: '+33', flag: '🇫🇷' },
+  { code: '+39', flag: '🇮🇹' },
+  { code: '+44', flag: '🇬🇧' },
+  { code: '+34', flag: '🇪🇸' },
+  { code: '+41', flag: '🇨🇭' },
+  { code: '+380', flag: '🇺🇦' },
+  { code: '+40', flag: '🇷🇴' },
+];
+
+const formatPhoneWithFlag = (phone?: string): string | null => {
+  if (!phone) return null;
+  // Find matching country code
+  for (const country of COUNTRY_CODES) {
+    if (phone.startsWith(country.code)) {
+      return `${country.flag} ${phone}`;
+    }
+  }
+  // Return phone as-is if no matching prefix
+  return phone;
+};
+
 export default function PurchaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { theme } = useTheme();
   const { getPurchaseById, updatePurchase, deletePurchase } = usePurchases();
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  // State pro modal dokončení výkupu
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [completePurchasePrice, setCompletePurchasePrice] = useState('');
+  const [completePurchaseDate, setCompletePurchaseDate] = useState('');
+  const [completeExpectedSalePrice, setCompleteExpectedSalePrice] = useState('');
   const purchase = getPurchaseById(id);
   if (!purchase) {
     return (
@@ -50,12 +92,30 @@ export default function PurchaseDetailScreen() {
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return null;
+    // Zkusíme parsovat český formát dd.mm.yyyy
+    const czechMatch = dateString.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (czechMatch) {
+      const [, day, month, year] = czechMatch;
+      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleDateString('cs-CZ', {
+          day: '2-digit',
+          month: 'long',
+          year: 'numeric'
+        });
+      }
+    }
+    // Fallback pro ISO formát nebo jiné formáty
     const date = new Date(dateString);
-    return date.toLocaleDateString('cs-CZ', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric'
-    });
+    if (!isNaN(date.getTime())) {
+      return date.toLocaleDateString('cs-CZ', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric'
+      });
+    }
+    // Pokud nic nefunguje, vrátíme původní string
+    return dateString;
   };
 
   const formatAmount = (amount?: number) => {
@@ -99,14 +159,48 @@ export default function PurchaseDetailScreen() {
     const nextState = getNextState(purchase.purchaseState);
     if (!nextState) return;
 
-    const actionText = nextState === PurchaseState.IN_PROGRESS 
-      ? 'Zahájit zpracování' 
-      : 'Označit jako dokončený';
+    if (nextState === PurchaseState.COMPLETED) {
+      // Při dokončení výkupu zobrazit modal pro zadání ceny a datumu
+      setCompletePurchasePrice(purchase.totalAmount?.toString() || '');
+      setCompletePurchaseDate(purchase.purchaseDate || new Date().toLocaleDateString('cs-CZ'));
+      setCompleteExpectedSalePrice(purchase.expectedSalePrice?.toString() || '');
+      setShowCompleteModal(true);
+    } else {
+      // Pro ostatní stavy standardní alert
+      Alert.alert('Aktualizovat stav', 'Zahájit zpracování tohoto výkupu?', [
+        { text: 'Zrušit', style: 'cancel' },
+        { text: 'Zahájit zpracování', onPress: () => updatePurchase(purchase.id, { purchaseState: nextState }) }
+      ]);
+    }
+  };
 
-    Alert.alert('Aktualizovat stav', `${actionText} tohoto výkupu?`, [
-      { text: 'Zrušit', style: 'cancel' },
-      { text: actionText, onPress: () => updatePurchase(purchase.id, { purchaseState: nextState }) }
-    ]);
+  const handleCompletePurchase = () => {
+    if (!completePurchasePrice.trim()) {
+      Alert.alert('Chyba', 'Prosím zadejte konečnou cenu výkupu');
+      return;
+    }
+    if (!completePurchaseDate.trim()) {
+      Alert.alert('Chyba', 'Prosím zadejte datum výkupu');
+      return;
+    }
+
+    const priceValue = parseInt(completePurchasePrice.replace(/\s/g, ''));
+    if (isNaN(priceValue) || priceValue <= 0) {
+      Alert.alert('Chyba', 'Prosím zadejte platnou cenu');
+      return;
+    }
+
+    const expectedSaleValue = completeExpectedSalePrice ? parseInt(completeExpectedSalePrice.replace(/\s/g, '')) : undefined;
+
+    updatePurchase(purchase.id, { 
+      purchaseState: PurchaseState.COMPLETED,
+      totalAmount: priceValue,
+      purchaseDate: completePurchaseDate,
+      expectedSalePrice: expectedSaleValue,
+    });
+
+    setShowCompleteModal(false);
+    Alert.alert('Úspěch', 'Výkup byl úspěšně dokončen');
   };
 
   const handleCancelPurchase = () => {
@@ -185,12 +279,16 @@ export default function PurchaseDetailScreen() {
           <Ionicons name="chevron-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>Detail výkupu</Text>
-        <TouchableOpacity 
-          style={[styles.moreButton, { backgroundColor: theme.inputBackground }]} 
-          onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
-        >
-          <Ionicons name="create-outline" size={20} color={theme.text} />
-        </TouchableOpacity>
+        {purchase.purchaseState === PurchaseState.IN_PROGRESS ? (
+          <TouchableOpacity 
+            style={[styles.moreButton, { backgroundColor: theme.inputBackground }]} 
+            onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
+          >
+            <Ionicons name="create-outline" size={20} color={theme.text} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.moreButton} />
+        )}
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -244,7 +342,7 @@ export default function PurchaseDetailScreen() {
             </Text>
           )}
 
-          <Text style={[styles.spzSmall, { color: theme.textTertiary }]}>{purchase.spz}</Text>
+          <Text style={[styles.spzSmall, { color: theme.textTertiary }]}>🇨🇿 {formatSpz(purchase.spz)}</Text>
 
           <View style={styles.heroStats}>
             <View style={styles.heroStat}>
@@ -334,7 +432,22 @@ export default function PurchaseDetailScreen() {
           </View>
         )}
 
-        {/* Klient - moved after Stav součástí */}
+        {/* Poznámky - moved before Klient */}
+        {purchase.notes && (
+          <View style={[styles.section, { backgroundColor: theme.card }]}>
+            <View style={styles.sectionHeader}>
+              <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
+                <Ionicons name="document-text" size={18} color={theme.accent} />
+              </View>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Poznámky</Text>
+            </View>
+            <View style={[styles.notesBox, { backgroundColor: theme.inputBackground }]}>
+              <Text style={[styles.notesText, { color: theme.text }]}>{purchase.notes}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Klient */}
         <View style={[styles.section, { backgroundColor: theme.card }]}>
           <View style={styles.sectionHeader}>
             <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
@@ -351,7 +464,7 @@ export default function PurchaseDetailScreen() {
               {renderInfoRow('DIČ', purchase.companyInfo.dic, 'document-outline')}
             </>
           )}
-          {renderInfoRow('Telefon', purchase.phone, 'call-outline')}
+          {renderInfoRow('Telefon', formatPhoneWithFlag(purchase.phone), 'call-outline')}
           {renderInfoRow('Ulice', purchase.street, 'location-outline')}
           {renderInfoRow('Město', purchase.city, 'map-outline')}
           {renderInfoRow('PSČ', purchase.postalCode, 'pin-outline')}
@@ -378,37 +491,24 @@ export default function PurchaseDetailScreen() {
           </View>
         )}
 
-        {/* Poznámky */}
-        {purchase.notes && (
-          <View style={[styles.section, { backgroundColor: theme.card }]}>
-            <View style={styles.sectionHeader}>
-              <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
-                <Ionicons name="document-text" size={18} color={theme.accent} />
-              </View>
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>Poznámky</Text>
-            </View>
-            <View style={[styles.notesBox, { backgroundColor: theme.inputBackground }]}>
-              <Text style={[styles.notesText, { color: theme.text }]}>{purchase.notes}</Text>
-            </View>
-          </View>
-        )}
-
         {/* Akce */}
         <View style={styles.actionsSection}>
-          <TouchableOpacity 
-            style={[styles.editButton, { backgroundColor: theme.card, borderColor: theme.accent }]} 
-            onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
-          >
-            <Ionicons name="create-outline" size={20} color={theme.accent} />
-            <Text style={[styles.editButtonText, { color: theme.accent }]}>Upravit výkup</Text>
-          </TouchableOpacity>
+          {purchase.purchaseState === PurchaseState.IN_PROGRESS && (
+            <TouchableOpacity 
+              style={[styles.editButton, { backgroundColor: theme.card, borderColor: theme.accent }]} 
+              onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
+            >
+              <Ionicons name="create-outline" size={20} color={theme.accent} />
+              <Text style={[styles.editButtonText, { color: theme.accent }]}>Upravit výkup</Text>
+            </TouchableOpacity>
+          )}
           {getNextState(purchase.purchaseState) && (
             <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.accent }]} onPress={handleStateUpdate}>
               <Ionicons name={getNextState(purchase.purchaseState) === PurchaseState.IN_PROGRESS ? 'play' : 'checkmark'} size={20} color="#FFFFFF" />
               <Text style={styles.primaryButtonText}>{getNextState(purchase.purchaseState) === PurchaseState.IN_PROGRESS ? 'Zahájit zpracování' : 'Označit jako dokončený'}</Text>
             </TouchableOpacity>
           )}
-          {purchase.purchaseState !== PurchaseState.CANCELLED && purchase.purchaseState !== PurchaseState.COMPLETED && (
+          {purchase.purchaseState === PurchaseState.IN_PROGRESS && (
             <TouchableOpacity style={[styles.secondaryButton, { borderColor: theme.error }]} onPress={handleCancelPurchase}>
               <Ionicons name="close" size={20} color={theme.error} />
               <Text style={[styles.secondaryButtonText, { color: theme.error }]}>Zrušit výkup</Text>
@@ -433,6 +533,93 @@ export default function PurchaseDetailScreen() {
           onClose={() => setSelectedImageIndex(null)}
         />
       )}
+
+      {/* Modal pro dokončení výkupu */}
+      <Modal
+        visible={showCompleteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCompleteModal(false)}
+      >
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity 
+            style={styles.modalBackdrop} 
+            activeOpacity={1} 
+            onPress={() => setShowCompleteModal(false)}
+          />
+          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconWrapper, { backgroundColor: theme.success + '20' }]}>
+                <Ionicons name="checkmark-circle" size={28} color={theme.success} />
+              </View>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Dokončit výkup</Text>
+              <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
+                Zadejte konečnou cenu výkupu a datum
+              </Text>
+            </View>
+
+            <View style={styles.modalForm}>
+              <View style={styles.modalInputGroup}>
+                <Text style={[styles.modalLabel, { color: theme.textSecondary }]}>Konečná cena výkupu</Text>
+                <View style={[styles.modalInputWrapper, { backgroundColor: theme.inputBackground, borderColor: theme.border }]}>
+                  <TextInput
+                    style={[styles.modalInput, { color: theme.text }]}
+                    value={completePurchasePrice}
+                    onChangeText={setCompletePurchasePrice}
+                    placeholder="0"
+                    placeholderTextColor={theme.textTertiary}
+                    keyboardType="numeric"
+                    returnKeyType="done"
+                  />
+                  <Text style={[styles.modalInputSuffix, { color: theme.textSecondary }]}>Kč</Text>
+                </View>
+              </View>
+
+              <DatePickerField
+                label="Datum výkupu"
+                value={completePurchaseDate}
+                onChange={setCompletePurchaseDate}
+                placeholder="dd.mm.yyyy"
+              />
+
+              <View style={styles.modalInputGroup}>
+                <Text style={[styles.modalLabel, { color: theme.textSecondary }]}>Před. cena prodeje</Text>
+                <View style={[styles.modalInputWrapper, { backgroundColor: theme.inputBackground, borderColor: theme.border }]}>
+                  <TextInput
+                    style={[styles.modalInput, { color: theme.text }]}
+                    value={completeExpectedSalePrice}
+                    onChangeText={setCompleteExpectedSalePrice}
+                    placeholder="0"
+                    placeholderTextColor={theme.textTertiary}
+                    keyboardType="numeric"
+                    returnKeyType="done"
+                  />
+                  <Text style={[styles.modalInputSuffix, { color: theme.textSecondary }]}>Kč</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalButtonSecondary, { backgroundColor: theme.inputBackground }]}
+                onPress={() => setShowCompleteModal(false)}
+              >
+                <Text style={[styles.modalButtonSecondaryText, { color: theme.text }]}>Zrušit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButtonPrimary, { backgroundColor: theme.success }]}
+                onPress={handleCompletePurchase}
+              >
+                <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                <Text style={styles.modalButtonPrimaryText}>Dokončit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -505,4 +692,23 @@ const styles = StyleSheet.create({
   deleteButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderRadius: 12, gap: 8, marginTop: 8 },
   deleteButtonText: { fontSize: 16, fontWeight: '600' },
   bottomSpacer: { height: 32 },
+  // Modal styles
+  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  modalContent: { width: '90%', maxWidth: 400, borderRadius: 20, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.25, shadowRadius: 20, elevation: 10 },
+  modalHeader: { alignItems: 'center', marginBottom: 24 },
+  modalIconWrapper: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 20, fontWeight: '700', marginBottom: 4 },
+  modalSubtitle: { fontSize: 14, textAlign: 'center' },
+  modalForm: { marginBottom: 24 },
+  modalInputGroup: { marginBottom: 16 },
+  modalLabel: { fontSize: 13, fontWeight: '500', marginBottom: 8 },
+  modalInputWrapper: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, borderWidth: 1, paddingHorizontal: 16 },
+  modalInput: { flex: 1, fontSize: 18, fontWeight: '600', paddingVertical: 14 },
+  modalInputSuffix: { fontSize: 16, fontWeight: '500', marginLeft: 8 },
+  modalActions: { flexDirection: 'row', gap: 12 },
+  modalButtonSecondary: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  modalButtonSecondaryText: { fontSize: 16, fontWeight: '600' },
+  modalButtonPrimary: { flex: 1, flexDirection: 'row', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  modalButtonPrimaryText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
 });

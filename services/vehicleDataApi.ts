@@ -212,6 +212,12 @@ const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> =>
   if (!data) return {};
 
   console.log('[VehicleDataAPI] Mapuji data:', JSON.stringify(data, null, 2));
+  
+  // Logujeme všechna pole pro debugging STK
+  console.log('[VehicleDataAPI] Všechna pole z API:', Object.keys(data));
+  console.log('[VehicleDataAPI] Pole obsahující STK nebo platnost:', 
+    Object.keys(data).filter(k => k.toLowerCase().includes('stk') || k.toLowerCase().includes('platnost') || k.toLowerCase().includes('tk'))
+  );
 
   // Parsování roku z datumu první registrace
   let rokVyroby: number | undefined;
@@ -221,13 +227,62 @@ const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> =>
     if (!isNaN(year)) rokVyroby = year;
   }
 
-  // Parsování datumu STK
+  // Parsování datumu STK - zkusíme různé názvy polí z API
   let stk: string | undefined;
-  if (data.PlatnostSTK) {
-    const date = new Date(data.PlatnostSTK);
-    if (!isNaN(date.getTime())) {
-      stk = date.toLocaleDateString('cs-CZ');
+  const stkFieldNames = [
+    'PravidelnaTechnickaProhlidkaDo', // Hlavní pole z API
+    'PlatnostSTK', 'STK', 'PlatnostTK', 'DatumSTK', 'platnostSTK', 'PlatnostDoSTK',
+    'STKDo', 'STKPlatnostDo', 'TKPlatnost', 'TechnickaKontrolaDo', 'PlatnostTechnickeKontroly'
+  ];
+  let stkRawValue: any = null;
+  let foundFieldName: string | null = null;
+  
+  // Nejprve zkusíme přesné názvy
+  for (const fieldName of stkFieldNames) {
+    if (data[fieldName] !== undefined && data[fieldName] !== null && data[fieldName] !== '') {
+      stkRawValue = data[fieldName];
+      foundFieldName = fieldName;
+      console.log(`[VehicleDataAPI] STK nalezeno v poli "${fieldName}":`, stkRawValue);
+      break;
     }
+  }
+  
+  // Pokud nenajdeme, zkusíme najít pole obsahující "stk" nebo "platnost" case-insensitive
+  if (!stkRawValue) {
+    for (const key of Object.keys(data)) {
+      const lowerKey = key.toLowerCase();
+      if ((lowerKey.includes('stk') || (lowerKey.includes('platnost') && lowerKey.includes('tk'))) && 
+          data[key] !== undefined && data[key] !== null && data[key] !== '') {
+        stkRawValue = data[key];
+        foundFieldName = key;
+        console.log(`[VehicleDataAPI] STK nalezeno dynamicky v poli "${key}":`, stkRawValue);
+        break;
+      }
+    }
+  }
+  
+  if (stkRawValue) {
+    // Zkusíme parsovat jako datum
+    const date = new Date(stkRawValue);
+    if (!isNaN(date.getTime()) && date.getFullYear() > 1900) {
+      stk = date.toLocaleDateString('cs-CZ');
+      console.log('[VehicleDataAPI] STK parsováno jako datum:', stk);
+    } else if (typeof stkRawValue === 'string') {
+      // Pokud už je to string ve formátu dd.mm.yyyy, použijeme přímo
+      if (stkRawValue.match(/^\d{1,2}\.\d{1,2}\.\d{4}$/)) {
+        stk = stkRawValue;
+        console.log('[VehicleDataAPI] STK použito přímo:', stk);
+      } else if (stkRawValue.match(/^\d{4}-\d{2}-\d{2}/)) {
+        // Formát ISO yyyy-mm-dd nebo yyyy-mm-ddThh:mm:ss
+        const parts = stkRawValue.split('T')[0].split('-');
+        if (parts.length === 3) {
+          stk = `${parts[2]}.${parts[1]}.${parts[0]}`;
+          console.log('[VehicleDataAPI] STK konvertováno z ISO:', stk);
+        }
+      }
+    }
+  } else {
+    console.log('[VehicleDataAPI] STK pole nenalezeno. Dostupná pole:', Object.keys(data));
   }
 
   // Parsování výkonu z formátu "75 / 5500" (kW / otáčky)

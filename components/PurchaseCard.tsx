@@ -47,12 +47,32 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
   };
 
   const formatDate = (dateString: string) => {
+    // Zkusíme parsovat český formát dd.mm.yyyy
+    const czechMatch = dateString.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (czechMatch) {
+      const [, day, month, year] = czechMatch;
+      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleDateString('cs-CZ', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric'
+        });
+      }
+    }
+
+    // Fallback pro ISO formát nebo jiné formáty
     const date = new Date(dateString);
-    return date.toLocaleDateString('cs-CZ', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    });
+    if (!isNaN(date.getTime())) {
+      return date.toLocaleDateString('cs-CZ', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    }
+
+    // Pokud nic nefunguje, vrátíme původní string
+    return dateString;
   };
 
   const stateColor = getStateColor(purchase.purchaseState);
@@ -93,6 +113,34 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
           <Text style={[styles.date, { color: theme.textTertiary }]}>
             {formatDate(purchase.purchaseDate)}
           </Text>
+          
+          {/* Vehicle badges - Servisní kniha, První majitel, Původ ČR, DPH */}
+          <View style={styles.badgesRow}>
+            {purchase.carDetails?.hasServiceBook && (
+              <View style={styles.badge}>
+                <Ionicons name="checkmark-circle" size={14} color={theme.success} />
+                <Text style={[styles.badgeText, { color: theme.success }]}>Servisní kniha</Text>
+              </View>
+            )}
+            {purchase.carDetails?.isFirstOwner && (
+              <View style={styles.badge}>
+                <Ionicons name="checkmark-circle" size={14} color={theme.success} />
+                <Text style={[styles.badgeText, { color: theme.success }]}>1. majitel</Text>
+              </View>
+            )}
+            {purchase.carDetails?.isImport === false && (
+              <View style={styles.badge}>
+                <Ionicons name="checkmark-circle" size={14} color={theme.success} />
+                <Text style={[styles.badgeText, { color: theme.success }]}>ČR</Text>
+              </View>
+            )}
+            {purchase.isVatPayer && (
+              <View style={styles.badge}>
+                <Ionicons name="checkmark-circle" size={14} color={theme.success} />
+                <Text style={[styles.badgeText, { color: theme.success }]}>DPH</Text>
+              </View>
+            )}
+          </View>
         </View>
 
         {/* Right side - State and Amount */}
@@ -102,7 +150,8 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
               {getStateLabel(purchase.purchaseState)}
             </Text>
           </View>
-          {purchase.totalAmount && (
+          {/* Zobrazit pouze Cenu výkupu (totalAmount), ne Cenu nabídnutou */}
+          {purchase.totalAmount && (!purchase.offeredPrice || purchase.totalAmount !== purchase.offeredPrice) && (
             <Text style={[styles.amount, { color: theme.text }]}>
               {purchase.totalAmount.toLocaleString('cs-CZ')} Kč
             </Text>
@@ -180,5 +229,20 @@ const styles = StyleSheet.create({
   amount: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  badgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    gap: 8,
+  },
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  badgeText: {
+    fontSize: 11,
+    fontWeight: '500',
   },
 });
