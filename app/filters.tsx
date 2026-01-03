@@ -12,11 +12,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { useTheme } from '@/contexts/ThemeContext';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { PurchaseFilter, PurchaseState, TimeFilterType } from '@/constants/types';
 import { defaultPurchaseFilter } from '@/constants/mockData';
+import { SelectionPicker } from '@/components/SelectionPicker';
+
+const BUYERS = ['---Výběr---', 'Kuruc Daniel', 'Jan Novák', 'Petr Svoboda', 'Marie Dvořáková'];
 
 export default function FiltersScreen() {
+  const { theme } = useTheme();
   const { filter, setFilter, clearFilter } = usePurchases();
   const [localFilter, setLocalFilter] = useState<PurchaseFilter>(filter);
 
@@ -95,119 +100,107 @@ export default function FiltersScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={handleCancel}>
-          <Text style={styles.cancelButton}>Zrušit</Text>
+      <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+        <TouchableOpacity style={styles.headerIconBtn} onPress={handleCancel}>
+          <Ionicons name="close" size={22} color={theme.text} />
         </TouchableOpacity>
-        <Text style={styles.title}>Filtry</Text>
-        <TouchableOpacity onPress={handleSave}>
-          <Text style={styles.saveButton}>Použít</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>Filtry</Text>
+        <TouchableOpacity 
+          style={[styles.headerSaveBtn, { backgroundColor: theme.accent }]} 
+          onPress={handleSave}
+        >
+          <Text style={styles.headerSaveText}>Použít</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Quick Filters */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Rychlé filtry</Text>
-          <View style={styles.filterRow}>
+        <View style={[styles.section, { backgroundColor: theme.card }]}>
+          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>Rychlé filtry</Text>
+          <View style={[styles.filterRow, { borderBottomColor: theme.border }]}>
             <View style={styles.filterInfo}>
-              <Text style={styles.filterLabel}>Pouze moje výkupy</Text>
-              <Text style={styles.filterDescription}>Zobrazit jen výkupy přiřazené mně</Text>
+              <Text style={[styles.filterLabel, { color: theme.text }]}>Pouze moje výkupy</Text>
+              <Text style={[styles.filterDescription, { color: theme.textSecondary }]}>Zobrazit jen výkupy přiřazené mně</Text>
             </View>
             <Switch
               value={localFilter.employeePurchasesOnly}
               onValueChange={(value) => updateFilter({ employeePurchasesOnly: value })}
-              trackColor={{ false: '#E5E5E7', true: '#e30613' }}
+              trackColor={{ false: theme.border, true: theme.accent }}
               thumbColor="#FFFFFF"
             />
           </View>
 
-          <View style={styles.filterRow}>
+          <View style={[styles.filterRow, { borderBottomColor: theme.border }]}>
             <View style={styles.filterInfo}>
-              <Text style={styles.filterLabel}>Dnešní výkupy</Text>
-              <Text style={styles.filterDescription}>Zobrazit pouze dnešní výkupy</Text>
+              <Text style={[styles.filterLabel, { color: theme.text }]}>Dnešní výkupy</Text>
+              <Text style={[styles.filterDescription, { color: theme.textSecondary }]}>Zobrazit pouze dnešní výkupy</Text>
             </View>
             <Switch
               value={localFilter.todayPurchases}
               onValueChange={(value) => updateFilter({ todayPurchases: value })}
-              trackColor={{ false: '#E5E5E7', true: '#e30613' }}
+              trackColor={{ false: theme.border, true: theme.accent }}
               thumbColor="#FFFFFF"
             />
           </View>
         </View>
 
         {/* Time Filter */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Časové období</Text>
+        <View style={[styles.section, { backgroundColor: theme.card }]}>
+          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>Časové období</Text>
           {Object.values(TimeFilterType).map((timeFilter) => (
             <TouchableOpacity
               key={timeFilter}
-              style={styles.optionRow}
+              style={[styles.optionRow, { borderBottomColor: theme.border }]}
               onPress={() => updateFilter({ timeFilter })}
             >
-              <Text style={styles.optionLabel}>{getTimeFilterText(timeFilter)}</Text>
+              <Text style={[styles.optionLabel, { color: theme.text }]}>{getTimeFilterText(timeFilter)}</Text>
               <Ionicons
                 name={localFilter.timeFilter === timeFilter ? 'radio-button-on' : 'radio-button-off'}
                 size={20}
-                color="#e30613"
+                color={theme.accent}
               />
             </TouchableOpacity>
           ))}
         </View>
 
         {/* Purchase States */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Stav výkupu</Text>
+        <View style={[styles.section, { backgroundColor: theme.card }]}>
+          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>Stav výkupu</Text>
           {Object.values(PurchaseState).map((state) => (
             <TouchableOpacity
               key={state}
-              style={styles.optionRow}
+              style={[styles.optionRow, { borderBottomColor: theme.border }]}
               onPress={() => togglePurchaseState(state)}
             >
-              <Text style={styles.optionLabel}>{getStateText(state)}</Text>
+              <Text style={[styles.optionLabel, { color: theme.text }]}>{getStateText(state)}</Text>
               <Ionicons
                 name={localFilter.purchaseStateFilter.includes(state) ? 'checkmark-circle' : 'ellipse-outline'}
                 size={20}
-                color="#e30613"
+                color={theme.accent}
               />
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* Search Filters */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Vyhledávání</Text>
-          <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Jméno klienta</Text>
-            <TextInput
-              style={styles.textInput}
-              value={localFilter.clientName}
-              onChangeText={(text) => updateFilter({ clientName: text })}
-              placeholder="Zadejte jméno klienta..."
-              placeholderTextColor="#8E8E93"
-              returnKeyType="done"
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Registrační značka (SPZ)</Text>
-            <TextInput
-              style={styles.textInput}
-              value={localFilter.spz}
-              onChangeText={(text) => updateFilter({ spz: text })}
-              placeholder="Zadejte registrační značku..."
-              placeholderTextColor="#8E8E93"
-              returnKeyType="done"
-              autoCapitalize="characters"
+        {/* Buyer dropdown */}
+        <View style={[styles.section, { backgroundColor: theme.card }]}>
+          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>Výkupčí</Text>
+          <View style={{ paddingHorizontal: 16 }}>
+            <SelectionPicker
+              label="Výkupčí"
+              value={localFilter.employeeName || '---Výběr---'}
+              options={BUYERS}
+              onSelect={(val) => updateFilter({ employeeName: val === '---Výběr---' ? '' : val })}
+              placeholder="---Výběr---"
             />
           </View>
         </View>
 
         {/* Clear All Button */}
-        <View style={styles.section}>
-          <TouchableOpacity style={styles.clearButton} onPress={handleClear}>
+        <View style={[styles.section, { backgroundColor: theme.card }]}>
+          <TouchableOpacity style={[styles.clearButton, { backgroundColor: theme.error }]} onPress={handleClear}>
             <Text style={styles.clearButtonText}>Vymazat všechny filtry</Text>
           </TouchableOpacity>
         </View>
@@ -224,14 +217,19 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 50,
+    paddingBottom: 16,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E7',
   },
+  headerIconBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '600', color: '#1A1A1A' },
+  headerSaveBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: '#FF3B30' },
+  headerSaveText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
   cancelButton: {
     fontSize: 17,
     color: '#8E8E93',
