@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -11,10 +11,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SelectionPicker } from '@/components/SelectionPicker';
 import { WheelPicker } from '@/components/WheelPicker';
 import { CameraCapture } from '@/components/CameraCapture';
@@ -39,6 +41,9 @@ import {
   fetchCompanyByIco,
   validateIco,
 } from '@/services/aresApi';
+import { apiService } from '@/services/apiService';
+import CounterAccountPicker from '@/components/CounterAccountPicker';
+import { Base44Car } from '@/services/base44Api';
 
 const PURCHASE_TABS = [
   { 
@@ -294,6 +299,40 @@ const VEHICLE_COMPONENTS = [
   'Světla',
 ];
 
+const DRAFT_STORAGE_KEY = 'new_purchase_draft';
+
+// Helper functions to save/load draft
+const saveDraftData = async (data: any) => {
+  try {
+    await AsyncStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(data));
+    console.log('[NewPurchase] Draft uložen do AsyncStorage');
+  } catch (error) {
+    console.error('[NewPurchase] Chyba při ukládání draftu:', error);
+  }
+};
+
+const loadDraftData = async () => {
+  try {
+    const saved = await AsyncStorage.getItem(DRAFT_STORAGE_KEY);
+    if (saved) {
+      console.log('[NewPurchase] Draft načten z AsyncStorage');
+      return JSON.parse(saved);
+    }
+  } catch (error) {
+    console.error('[NewPurchase] Chyba při načítání draftu:', error);
+  }
+  return null;
+};
+
+const clearDraftData = async () => {
+  try {
+    await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
+    console.log('[NewPurchase] Draft vymazán');
+  } catch (error) {
+    console.error('[NewPurchase] Chyba při mazání draftu:', error);
+  }
+};
+
 const STATUS_OPTIONS = [
   { key: 'excellent', label: 'Výborné', color: '#34C759', icon: 'checkmark-circle' },
   { key: 'good', label: 'Dobré', color: '#30D158', icon: 'checkmark-circle-outline' },
@@ -310,23 +349,28 @@ interface ComponentStatus {
 export default function NewPurchaseScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{
-    vin?: string;
-    firstName?: string;
-    lastName?: string;
-    companyName?: string;
-    isCompany?: string;
-    ico?: string;
-    vehicleData?: string;
-    companyData?: string;
-  }>();
+  const { initData, clearInitData } = usePurchases();
   const [selectedTab, setSelectedTab] = useState('zakladni');
+  // Refs for vertical scroll reset per tab
+  const zakladniRef = useRef<ScrollView>(null);
+  const automobilRef = useRef<ScrollView>(null);
+  const stavSoucastiRef = useRef<ScrollView>(null);
+  const fotoVadyRef = useRef<ScrollView>(null);
+  // Ref and layout cache to center active tab in header
+  const tabsScrollRef = useRef<ScrollView>(null);
+  const tabLayoutsRef = useRef<Record<string, { x: number; width: number }>>({});
 
+  // Helper to format today's date as dd.mm.yyyy
+  const formatToday = () => {
+    const d = new Date();
+    const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+  };
   // Form data for all tabs
   const [zakladniData, setZakladniData] = useState({
     stav: 'Nový',
     vykupci: 'Kuruc Daniel',
-    datumProhlidky: '',
+    datumProhlidky: formatToday(),
     datumVykupu: '',
     cenaZakaznik: '',
     cenaNabidnuta: '',
@@ -348,13 +392,13 @@ export default function NewPurchaseScreen() {
     spz: '',
     motorovaVarianta: '---Výběr---',
     km: '',
-    stk: '18.09.2025',
+    stk: '',
     vykon: '',
     prevodovka: '---Výběr---',
     karoserie: '---Výběr---',
     pohon: '---Výběr---',
     kolaAI: false,
-    doProvozu: '18.09.2025',
+    doProvozu: '',
     dovoz: false,
     prvniMajitel: false,
     servisniKnizka: false,
@@ -378,6 +422,9 @@ export default function NewPurchaseScreen() {
   const [loading, setLoading] = useState(false);
   const [vinLoading, setVinLoading] = useState(false);
   const [icoLoading, setIcoLoading] = useState(false);
+  // Counter-account selection
+  const [showCounterPicker, setShowCounterPicker] = useState(false);
+  const [counterCar, setCounterCar] = useState<Base44Car | null>(null);
 
   const { addPurchase } = usePurchases();
 
@@ -390,96 +437,124 @@ export default function NewPurchaseScreen() {
     odkudZna: '---Výběr---',
   });
 
-  // Initialize form from route params - single useEffect
+  // Initialize form from initData in context on mount
   useEffect(() => {
-    // Only run once on mount, skip if no relevant params
-    const hasParams = params.vin || params.firstName || params.companyName || params.vehicleData;
-    if (!hasParams) return;
+    console.log('[NewPurchase] INIT useEffect - checking initData:', initData);
 
-    console.log('[NewPurchase] Initializing from params:', params);
+    const hasInitData = initData?.vin || initData?.firstName || initData?.companyName || initData?.vehicleData;
+    if (!hasInitData) {
+      console.log('[NewPurchase] No initData detected → starting with a clean form and clearing any stale draft');
+      // Important: Do NOT load draft automatically here to avoid persisting old test values
+      clearDraftData().catch(err => console.warn('[NewPurchase] Failed to clear draft (non-critical):', err));
+      return;
+    }
+
+    console.log('[NewPurchase] ========== APPLYING INITDATA ==========');
+
+    // Set basic client info
+    if (initData.firstName || initData.lastName || initData.companyName) {
+      setZakladniData(prev => ({
+        ...prev,
+        jmeno: initData.firstName || '',
+        prijmeni: initData.lastName || '',
+        nazevFirmy: initData.companyName || '',
+        firma: initData.isCompany || false,
+        ico: initData.ico || '',
+      }));
+    }
 
     // Set VIN
-    if (params.vin) {
-      setSouhrnData(prev => ({ ...prev, vin: params.vin || '' }));
+    if (initData.vin) {
+      setSouhrnData(prev => ({ ...prev, vin: initData.vin || '' }));
     }
 
-    // Set client info
-    const isCompany = params.isCompany === '1';
-    setZakladniData(prev => ({
-      ...prev,
-      jmeno: params.firstName || prev.jmeno,
-      prijmeni: params.lastName || prev.prijmeni,
-      nazevFirmy: params.companyName || prev.nazevFirmy,
-      firma: isCompany,
-      ico: params.ico || prev.ico,
-    }));
+    // Set vehicle data from API
+    if (initData.vehicleData) {
+      const vd = initData.vehicleData;
+      const znacka = normalizeZnacka(vd.znacka || '');
+      const model = findMatchingModel(znacka, vd.model || '');
 
-    // Parse and apply company data from ARES
-    if (params.companyData) {
-      try {
-        const companyData = JSON.parse(params.companyData) as AresCompanyData;
-        console.log('[NewPurchase] Applying ARES company data:', companyData);
-
-        setZakladniData(prev => ({
-          ...prev,
-          nazevFirmy: companyData.nazev || prev.nazevFirmy,
-          ico: companyData.ico || prev.ico,
-          ulice: companyData.ulice || prev.ulice,
-          mesto: companyData.mesto || prev.mesto,
-          psc: companyData.psc?.replace(/\s/g, '') || prev.psc,
-        }));
-      } catch (e) {
-        console.error('[NewPurchase] Failed to parse company data:', e);
-      }
+      setAutomobilData(prev => ({
+        ...prev,
+        znacka,
+        model,
+        motorovaVarianta: mapFuelToWheelPicker(vd.palivo || '', vd.objemMotoru),
+        vykon: vd.vykonKw?.toString() || '',
+        karoserie: mapKaroserie(vd.karoserie || ''),
+        stk: vd.stk || '',
+        doProvozu: vd.datumPrvniRegistrace || '',
+        prevodovka: mapPrevodovka(vd.prevodovka || ''),
+        pohon: mapPohon(vd.pohon || ''),
+      }));
+      setSouhrnData(prev => ({ ...prev, vinProveren: true }));
     }
 
-    // Parse and apply vehicle data from API
-    if (params.vehicleData) {
-      try {
-        const vehicleData = JSON.parse(params.vehicleData) as VehicleDataResponse;
-        console.log('[NewPurchase] Applying vehicle data:', vehicleData);
-
-        // Normalize brand and model using helper functions
-        const normalizedZnacka = normalizeZnacka(vehicleData.znacka || '');
-        const normalizedModel = findMatchingModel(normalizedZnacka, vehicleData.model || '');
-
-        // Map fuel to motorovaVarianta
-        const motorovaVarianta = mapFuelToWheelPicker(vehicleData.palivo || '', vehicleData.objemMotoru);
-
-        // Map karoserie
-        const karoserie = mapKaroserie(vehicleData.karoserie || '');
-
-        // Map prevodovka
-        const prevodovka = mapPrevodovka(vehicleData.prevodovka || '');
-
-        // Map pohon
-        const pohon = mapPohon(vehicleData.pohon || '');
-        setAutomobilData(prev => ({
-          ...prev,
-          znacka: normalizedZnacka || prev.znacka,
-          model: normalizedModel || prev.model,
-          motorovaVarianta: motorovaVarianta || prev.motorovaVarianta,
-          vykon: vehicleData.vykonKw?.toString() || prev.vykon,
-          karoserie: karoserie || prev.karoserie,
-          stk: vehicleData.stk || prev.stk,
-          doProvozu: vehicleData.datumPrvniRegistrace || prev.doProvozu,
-          prevodovka: prevodovka || prev.prevodovka,
-          pohon: pohon || prev.pohon,
-        }));
-
-        setSouhrnData(prev => ({ ...prev, vinProveren: true }));
-      } catch (e) {
-        console.error('[NewPurchase] Failed to parse vehicle data:', e);
-      }
+    // Set company data from ARES
+    if (initData.companyData) {
+      const cd = initData.companyData;
+      setZakladniData(prev => ({
+        ...prev,
+        nazevFirmy: cd.nazev || prev.nazevFirmy,
+        ico: cd.ico || prev.ico,
+        ulice: cd.ulice || prev.ulice,
+        mesto: cd.mesto || prev.mesto,
+        psc: cd.psc?.replace(/\s/g, '') || prev.psc,
+      }));
     }
-  }, []); // Empty dependency array - run only once on mount
+
+    // Clear initData after using it
+    clearInitData();
+  }, []);
+
+  // Auto-save draft when any data changes
+  useEffect(() => {
+    const draftToSave = {
+      zakladniData,
+      automobilData,
+      stavSoucastiData,
+      generalNotes,
+      vehicleImages,
+      defectImages,
+      interiorImages,
+      souhrnData,
+    };
+    saveDraftData(draftToSave);
+  }, [zakladniData, automobilData, stavSoucastiData, generalNotes, vehicleImages, defectImages, interiorImages, souhrnData]);
 
   const handleTabPress = (tab: typeof PURCHASE_TABS[0]) => {
     setSelectedTab(tab.key);
   };
 
+  // When selectedTab changes: scroll content to top and center active tab chip
+  useEffect(() => {
+    // Vertical reset
+    const refMap: Record<string, React.RefObject<ScrollView>> = {
+      zakladni: zakladniRef,
+      automobil: automobilRef,
+      'stav-soucasti': stavSoucastiRef,
+      'foto-vady': fotoVadyRef,
+    };
+    const targetRef = refMap[selectedTab];
+    targetRef?.current?.scrollTo({ y: 0, animated: false });
+
+    // Center active tab in horizontal bar
+    const layout = tabLayoutsRef.current[selectedTab];
+    if (layout && tabsScrollRef.current) {
+      const screenW = Dimensions.get('window').width;
+      const targetX = Math.max(0, layout.x + layout.width / 2 - screenW / 2);
+      tabsScrollRef.current.scrollTo({ x: targetX, animated: true });
+    }
+  }, [selectedTab]);
+
   const handleClose = () => {
-    router.back();
+    Alert.alert(
+      'Zavřít bez uložení?',
+      'Vaše data budou uložena jako návrh a můžete je později pokračovat v editaci.',
+      [
+        { text: 'Pokračovat v editaci', style: 'cancel' },
+        { text: 'Zavřít', style: 'destructive', onPress: () => router.back() }
+      ]
+    );
   };
 
   const handleFetchVehicleData = async () => {
@@ -684,13 +759,6 @@ export default function NewPurchaseScreen() {
   const performSave = async () => {
     setLoading(true);
     try {
-      // Combine all images
-      const allImages = [
-        ...vehicleImages,
-        ...defectImages,
-        ...interiorImages
-      ];
-
       // Determine purchase state
       let purchaseState = PurchaseState.NEW;
       if (zakladniData.stav === 'Probíhá') purchaseState = PurchaseState.IN_PROGRESS;
@@ -709,13 +777,13 @@ export default function NewPurchaseScreen() {
         if (match) carYear = parseInt(match[1]);
       }
 
-      // Create purchase object with all collected data
+      // Create purchase object BEFORE uploading photos (temporary id, replaced after API create)
       const newPurchase: Purchase = {
-        id: Date.now().toString(),
+        id: 'temp',
         clientName: clientName || 'Neznámý klient',
         clientType: zakladniData.firma ? ClientType.COMPANY : ClientType.PERSONAL,
         spz: automobilData.spz || 'N/A',
-        purchaseDate: zakladniData.datumVykupu || undefined,
+        purchaseDate: zakladniData.datumVykupu,
         purchaseState,
         employeeId: '1', // Current user
         // Car details - complete mapping
@@ -744,8 +812,9 @@ export default function NewPurchaseScreen() {
         },
         // Notes
         notes: generalNotes || undefined,
-        // Images
-        images: allImages.length > 0 ? allImages : undefined,
+        // Images - will be updated after upload
+        images: undefined,
+        defectImages: undefined,
         // Financial data
         totalAmount: souhrnData.cenaVykupu ? parseInt(souhrnData.cenaVykupu) : (zakladniData.cenaNabidnuta ? parseInt(zakladniData.cenaNabidnuta) : undefined),
         customerPrice: zakladniData.cenaZakaznik ? parseInt(zakladniData.cenaZakaznik) : undefined,
@@ -763,11 +832,18 @@ export default function NewPurchaseScreen() {
         companyInfo: zakladniData.firma ? {
           companyName: zakladniData.nazevFirmy,
           ico: zakladniData.ico || undefined,
-          dic: undefined, // Not collected in form
+          dic: undefined,
         } : undefined,
         // Summary data
         sourceKnowledge: souhrnData.odkudZna !== '---Výběr---' ? souhrnData.odkudZna : undefined,
         isCounterAccount: souhrnData.protiucet,
+        counterAccountCar: souhrnData.protiucet && counterCar ? {
+          id: counterCar.id,
+          make: counterCar.make,
+          model: counterCar.model,
+          variant: counterCar.variant,
+          price: counterCar.price ?? undefined,
+        } : undefined,
         vinVerified: souhrnData.vinProveren,
         // Component statuses
         componentStatuses: stavSoucastiData.map(item => ({
@@ -777,14 +853,100 @@ export default function NewPurchaseScreen() {
         })),
       };
 
-      console.log('[NewPurchase] Ukládám výkup:', JSON.stringify(newPurchase, null, 2));
+      // Pošli výkup na API (BEZ fotek zatím)
+      console.log('[NewPurchase] Ukládám výkup na API server bez fotek...');
+      let purchaseResult: any;
+      try {
+        purchaseResult = await apiService.createPurchase(newPurchase);
+        console.log('[NewPurchase] Výkup uložen na serveru:', purchaseResult);
+        // Set server ID for subsequent photo uploads and local state
+        const serverId = String(purchaseResult?.id || purchaseResult?.data?.id);
+        if (serverId) {
+          newPurchase.id = serverId;
+        } else {
+          console.warn('[NewPurchase] Server nevrátil ID nákupu, použit dočasný ID může způsobit selhání uploadu');
+        }
+      } catch (apiError: any) {
+        console.error('[NewPurchase] Chyba při ukládání na API:', apiError);
+        Alert.alert('Chyba', `Nepodařilo se uložit výkup na server: ${apiError.message}`);
+        setLoading(false);
+        return;
+      }
+
+      // Teď uploaduj fotky s ID ze serveru
+      console.log('[NewPurchase] Zahájem upload fotek na API server...');
+      const uploadedVehicleImages: string[] = [];
+      const uploadedDefectImages: string[] = [];
+      const uploadedInteriorImages: string[] = [];
+      let hadUploadError = false;
+
+      // Upload vehicle images
+      if (vehicleImages.length > 0) {
+        try {
+          console.log(`[NewPurchase] Uploaduji ${vehicleImages.length} fotek vozidla...`);
+          const result = await apiService.uploadPhotos(newPurchase.id, vehicleImages);
+          if (result.success && result.files) {
+            uploadedVehicleImages.push(...result.files);
+          }
+        } catch (error) {
+          console.error('[NewPurchase] Chyba při ukládání fotek vozidla:', error);
+          hadUploadError = true;
+        }
+      }
+
+      // Upload defect images
+      if (defectImages.length > 0) {
+        try {
+          console.log(`[NewPurchase] Uploaduji ${defectImages.length} fotek vad...`);
+          const result = await apiService.uploadDefectPhotos(newPurchase.id, defectImages);
+          if (result.success && result.files) {
+            uploadedDefectImages.push(...result.files);
+          }
+        } catch (error) {
+          console.error('[NewPurchase] Chyba při ukládání fotek vad:', error);
+          hadUploadError = true;
+        }
+      }
+
+      // Upload interior images
+      if (interiorImages.length > 0) {
+        try {
+          console.log(`[NewPurchase] Uploaduji ${interiorImages.length} fotek interiéru...`);
+          const result = await apiService.uploadPhotos(newPurchase.id, interiorImages);
+          if (result.success && result.files) {
+            uploadedInteriorImages.push(...result.files);
+          }
+        } catch (error) {
+          console.error('[NewPurchase] Chyba při ukládání fotek interiéru:', error);
+          hadUploadError = true;
+        }
+      }
+
+      // Combine uploaded images
+      const vehicleAndInteriorImages = [
+        ...uploadedVehicleImages,
+        ...uploadedInteriorImages
+      ];
+
+      // Aktualizuj purchase s uploadnutými fotkama v lokalním kontextu
+      newPurchase.images = vehicleAndInteriorImages.length > 0 ? vehicleAndInteriorImages : undefined;
+      newPurchase.defectImages = uploadedDefectImages.length > 0 ? uploadedDefectImages : undefined;
+
+      // Přidej do lokálního kontextu pro offline synchronizaci
       addPurchase(newPurchase);
 
-      Alert.alert(
-        'Úspěch',
-        'Výkup byl úspěšně uložen',
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      // Vymazat draft po úspěšném uložení
+      await clearDraftData();
+
+      if (hadUploadError) {
+        Alert.alert('Varování', 'Výkup byl uložen, ale některé fotky se nepodařilo nahrát', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      } else {
+        Alert.alert('Úspěch', 'Výkup byl úspěšně uložen s fotografiemi', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      }
     } catch (error) {
       console.error('[NewPurchase] Chyba při ukládání:', error);
       Alert.alert('Chyba', 'Nepodařilo se uložit výkup');
@@ -895,7 +1057,7 @@ export default function NewPurchaseScreen() {
   };
 
   const renderZakladniContent = () => (
-    <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={zakladniRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: theme.text }]}>Základní informace</Text>
 
       <SelectionPicker
@@ -1045,7 +1207,7 @@ export default function NewPurchaseScreen() {
   );
 
   const renderAutomobilContent = () => (
-    <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={automobilRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: theme.text }]}>Informace o vozidle</Text>
 
       {/* VIN Input with Lookup Button - at the top */}
@@ -1077,7 +1239,7 @@ export default function NewPurchaseScreen() {
           </TouchableOpacity>
         </View>
         <Text style={[styles.vinHelpText, { color: theme.textTertiary }]}>
-          Zadejte VIN a klikněte na "Načíst" pro automatické doplnění údajů o vozidle
+          Zadejte VIN a klikněte na &quot;Načíst&quot; pro automatické doplnění údajů o vozidle
         </Text>
       </View>
 
@@ -1201,13 +1363,34 @@ export default function NewPurchaseScreen() {
       {renderToggleField(
         'Protiúčet',
         souhrnData.protiucet,
-        (value) => setSouhrnData(prev => ({ ...prev, protiucet: value }))
+        (value) => {
+          setSouhrnData(prev => ({ ...prev, protiucet: value }));
+          if (value) setShowCounterPicker(true); else setCounterCar(null);
+        }
+      )}
+
+      {counterCar && (
+        <View style={[styles.photoSection, { backgroundColor: theme.card, borderColor: theme.border }]}> 
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>Vybraný protiúčet</Text>
+          <Text style={{ color: theme.text }}>{counterCar.make} {counterCar.model}</Text>
+          {!!counterCar.variant && <Text style={{ color: theme.textSecondary }}>{counterCar.variant}</Text>}
+          {!!counterCar.price && <Text style={{ color: theme.text }}>{counterCar.price.toLocaleString('cs-CZ')} Kč</Text>}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+            <TouchableOpacity onPress={() => setShowCounterPicker(true)} style={[styles.vinLookupButton, { backgroundColor: theme.accent }]}>
+              <Ionicons name="refresh" size={18} color="#FFFFFF" />
+              <Text style={styles.vinLookupButtonText}>Změnit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setCounterCar(null); setSouhrnData(prev => ({ ...prev, protiucet: false })); }} style={[styles.vinLookupButton, { backgroundColor: theme.inputBackground }]}>
+              <Text style={[styles.vinLookupButtonText, { color: theme.text }]}>Odebrat</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
     </ScrollView>
   );
 
   const renderStavSoucastiContent = () => (
-    <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={stavSoucastiRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: theme.text }]}>Hodnocení stavu součástí vozidla</Text>
       <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>Vyhodnoťte stav každé součásti</Text>
 
@@ -1251,14 +1434,26 @@ export default function NewPurchaseScreen() {
             </Text>
           </View>
 
+          <View style={styles.noteHeader}>
+            <Ionicons name="create-outline" size={16} color={theme.textSecondary} />
+            <Text style={[styles.noteHeaderText, { color: theme.textSecondary }]}>Poznámka</Text>
+          </View>
           <TextInput
-            style={[styles.componentNotes, { backgroundColor: theme.inputBackground, color: theme.text }]}
+            style={[
+              styles.componentNotes,
+              {
+                backgroundColor: theme.inputBackground,
+                color: theme.text,
+                borderColor: item.notes ? theme.accent : theme.border,
+              },
+            ]}
             value={item.notes}
             onChangeText={(text) => updateComponentNotes(index, text)}
-            placeholder="Další poznámky k této součásti..."
+            placeholder='Zapište poznámku (např. "lehké pískání při brzdění")'
             placeholderTextColor={theme.textTertiary}
             multiline
-            numberOfLines={2}
+            numberOfLines={3}
+            textAlignVertical="top"
           />
         </View>
       ))}
@@ -1285,7 +1480,7 @@ export default function NewPurchaseScreen() {
     };
 
     return (
-      <ScrollView style={styles.tabContent} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={fotoVadyRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
         {/* Photo Summary */}
         <View style={[styles.photoSummarySection, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.sectionTitle, { color: theme.text }]}>Přehled fotografií</Text>
@@ -1297,11 +1492,11 @@ export default function NewPurchaseScreen() {
           </View>
         </View>
 
-        {/* Vehicle Exterior Photos */}
+        {/* Section 1: Foto vozidla */}
         <View style={[styles.photoSection, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Exteriér vozidla</Text>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>Foto vozidla</Text>
           <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>
-            Zachyťte celkový stav exteriéru, úhly a obecný vzhled
+            Zachyťte exteriér, interiér a všechny detaily vozidla
           </Text>
           <CameraCapture
             images={vehicleImages}
@@ -1311,9 +1506,9 @@ export default function NewPurchaseScreen() {
           />
         </View>
 
-        {/* Defects and Damage Photos */}
+        {/* Section 2: Foto vady */}
         <View style={[styles.photoSection, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Vady a poškození</Text>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>Foto vady</Text>
           <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>
             Zdokumentujte škrábance, promáčknutí, rez nebo jiné problémy
           </Text>
@@ -1323,40 +1518,6 @@ export default function NewPurchaseScreen() {
             onAddImages={(uris) => setDefectImages(prev => [...prev, ...uris])}
             onRemoveImage={(index) => setDefectImages(prev => prev.filter((_, i) => i !== index))}
           />
-        </View>
-
-        {/* Interior Photos */}
-        <View style={[styles.photoSection, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Stav interiéru</Text>
-          <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>
-            Zachyťte sedadla, palubní desku, ovládací prvky a opotřebení interiéru
-          </Text>
-          <CameraCapture
-            images={interiorImages}
-            onAddImage={(uri) => setInteriorImages(prev => [...prev, uri])}
-            onAddImages={(uris) => setInteriorImages(prev => [...prev, ...uris])}
-            onRemoveImage={(index) => setInteriorImages(prev => prev.filter((_, i) => i !== index))}
-          />
-        </View>
-
-        {/* Photo Guidelines */}
-        <View style={[styles.guidelinesSection, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Pokyny pro fotografování</Text>
-          <View style={styles.guidelinesList}>
-            {[
-              'Pořizujte jasné, dobře osvětlené fotografie',
-              'Zachyťte více úhlů pro každou oblast',
-              'Zaměřte se na jakékoli poškození nebo vady',
-              'Přiložte detailní záběry problematických oblastí',
-              'Zajistěte, aby fotografie nebyly rozmazané',
-              'Zdokumentujte všechny významné funkce'
-            ].map((guideline, index) => (
-              <View key={index} style={styles.guidelineItem}>
-                <Ionicons name="checkmark-circle" size={16} color="#34C759" />
-                <Text style={[styles.guidelineText, { color: theme.textSecondary }]}>{guideline}</Text>
-              </View>
-            ))}
-          </View>
         </View>
 
         <View style={styles.bottomSpacer} />
@@ -1397,7 +1558,12 @@ export default function NewPurchaseScreen() {
 
       {/* Tab Navigation */}
       <View style={[styles.tabNavigation, { backgroundColor: theme.surface }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScrollContent}>
+        <ScrollView
+          ref={tabsScrollRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabScrollContent}
+        >
           {PURCHASE_TABS.map((tab) => {
             const isSelected = tab.key === selectedTab;
             return (
@@ -1408,6 +1574,10 @@ export default function NewPurchaseScreen() {
                   { backgroundColor: isSelected ? theme.accent : theme.inputBackground }
                 ]}
                 onPress={() => handleTabPress(tab)}
+                onLayout={(e) => {
+                  const { x, width } = e.nativeEvent.layout;
+                  tabLayoutsRef.current[tab.key] = { x, width };
+                }}
               >
                 <Ionicons 
                   name={tab.icon} 
@@ -1431,6 +1601,11 @@ export default function NewPurchaseScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         {renderTabContent()}
+        <CounterAccountPicker
+          visible={showCounterPicker}
+          onClose={() => setShowCounterPicker(false)}
+          onSelect={(car) => { setCounterCar(car); setSouhrnData(prev => ({ ...prev, protiucet: true })); }}
+        />
       </KeyboardAvoidingView>
     </View>
   );
@@ -1551,10 +1726,13 @@ const styles = StyleSheet.create({
   statusLabelText: { fontSize: 13 },
   componentNotes: { 
     fontSize: 14, 
-    padding: 10, 
-    borderRadius: 8, 
-    minHeight: 40 
+    padding: 12, 
+    borderRadius: 10, 
+    minHeight: 64,
+    borderWidth: 1,
   },
+  noteHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  noteHeaderText: { fontSize: 13, fontWeight: '500' },
   generalNotesSection: { marginTop: 16 },
   multilineInput: { 
     fontSize: 14, 

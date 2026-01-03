@@ -9,6 +9,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -84,7 +86,7 @@ export async function sendPurchaseStatusNotification(
     content: {
       title: 'Změna stavu výkupu',
       body: `Výkup ${spz} (${clientName}) - nový stav: ${stateLabel}`,
-      data: { purchaseId, type: 'status_change' } as NotificationData,
+      data: { purchaseId, type: 'status_change' } as Record<string, unknown>,
       sound: 'default',
     },
     trigger: null, // Okamžité odeslání
@@ -104,12 +106,13 @@ export async function scheduleReminder(
     content: {
       title,
       body,
-      data,
+      data: data as Record<string, unknown>,
       sound: 'default',
     },
     trigger: {
+      type: 'date',
       date: triggerDate,
-    },
+    } as any,
   });
 
   return identifier;
@@ -128,7 +131,7 @@ export async function sendReportNotification(
     content: {
       title,
       body: summary,
-      data: { type: 'report' } as NotificationData,
+      data: { type: 'report' } as Record<string, unknown>,
       sound: 'default',
     },
     trigger: null,

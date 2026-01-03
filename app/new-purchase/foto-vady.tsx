@@ -18,7 +18,6 @@ export default function FotoVadyScreen() {
   const { addPurchase } = usePurchases();
   const [vehicleImages, setVehicleImages] = useState<string[]>([]);
   const [defectImages, setDefectImages] = useState<string[]>([]);
-  const [interiorImages, setInteriorImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
   const handleAddVehicleImage = (imageUri: string) => {
@@ -37,36 +36,20 @@ export default function FotoVadyScreen() {
     setDefectImages(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleAddInteriorImage = (imageUri: string) => {
-    setInteriorImages(prev => [...prev, imageUri]);
-  };
-
-  const handleRemoveInteriorImage = (index: number) => {
-    setInteriorImages(prev => prev.filter((_, i) => i !== index));
-  };
-
   const handleComplete = async () => {
     setLoading(true);
     try {
-      // Combine all images
-      const allImages = [
-        ...vehicleImages,
-        ...defectImages,
-        ...interiorImages
-      ];
-
-      // Create mock purchase with all collected data
       const newPurchase: Purchase = {
         id: Date.now().toString(),
-        clientName: 'Vzorový klient', // This would come from collected data
+        clientName: 'Vzorový klient',
         clientType: ClientType.PERSONAL,
-        spz: 'BA123AB', // This would come from collected data
+        spz: 'BA123AB',
         purchaseDate: new Date().toISOString().split('T')[0],
         purchaseState: PurchaseState.NEW,
         employeeId: '1',
         carDetails: {
           id: Date.now().toString(),
-          make: 'BMW', // This would come from collected data
+          make: 'BMW',
           model: '3 Series',
           year: 2020,
           color: 'Černá',
@@ -78,7 +61,8 @@ export default function FotoVadyScreen() {
         },
         notes: 'Výkup vytvořený prostřednictvím nového vícekrokového formuláře',
         totalAmount: 25000,
-        images: allImages
+        images: vehicleImages.length > 0 ? vehicleImages : undefined,
+        defectImages: defectImages.length > 0 ? defectImages : undefined
       };
 
       addPurchase(newPurchase);
@@ -86,7 +70,7 @@ export default function FotoVadyScreen() {
       Alert.alert(
         'Úspěch',
         'Výkup byl úspěšně vytvořen',
-        [{ text: 'OK', onPress: () => router.dismissAll() }]
+        [{ text: 'OK', onPress: () => router.back() }]
       );
     } catch (error) {
       Alert.alert('Chyba', 'Nepodařilo se vytvořit výkup');
@@ -99,104 +83,51 @@ export default function FotoVadyScreen() {
     router.back();
   };
 
-  const getTotalImageCount = () => {
-    return vehicleImages.length + defectImages.length + interiorImages.length;
-  };
-
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#F2F2F7" />
 
-      {/* Top Header */}
-      <View style={styles.topHeader}>
-        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
           <Ionicons name="chevron-back" size={24} color="#007AFF" />
-          <Text style={styles.backButtonText}>Zpět</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Foto vady</Text>
-        <View style={styles.backButton} />
+        <View style={styles.backBtn} />
       </View>
+
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Photo Summary */}
+        {/* Section 1: Foto vozidla */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Přehled fotografií</Text>
-          <View style={styles.summaryRow}>
-            <Ionicons name="images" size={20} color="#007AFF" />
-            <Text style={styles.summaryText}>
-              {getTotalImageCount()} fotografií pořízeno
-            </Text>
+          <Text style={styles.sectionTitle}>Foto vozidla</Text>
+          <Text style={styles.sectionDescription}>
+            Zachyťte exteriér, interiér a všechny detaily vozidla
+          </Text>
+          <View style={{ height: 100, backgroundColor: '#F2F2F7', borderRadius: 8, justifyContent: 'center', alignItems: 'center' }}>
+            <Text>Nahrávání fotek - dočasně skryto</Text>
           </View>
         </View>
 
-        {/* Vehicle Exterior Photos */}
+        {/* Section 2: Foto vady */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Exteriér vozidla</Text>
-          <Text style={styles.sectionDescription}>
-            Zachyťte celkový stav exteriéru, úhly a obecný vzhled
-          </Text>
-          <CameraCapture
-            images={vehicleImages}
-            onAddImage={handleAddVehicleImage}
-            onRemoveImage={handleRemoveVehicleImage}
-          />
-        </View>
-
-        {/* Defects and Damage Photos */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Vady a poškození</Text>
+          <Text style={styles.sectionTitle}>Foto vady</Text>
           <Text style={styles.sectionDescription}>
             Zdokumentujte škrábance, promáčknutí, rez nebo jiné problémy
           </Text>
-          <CameraCapture
-            images={defectImages}
-            onAddImage={handleAddDefectImage}
-            onRemoveImage={handleRemoveDefectImage}
-          />
-        </View>
-
-        {/* Interior Photos */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Stav interiéru</Text>
-          <Text style={styles.sectionDescription}>
-            Zachyťte sedadla, palubní desku, ovládací prvky a opotřebení interiéru
-          </Text>
-          <CameraCapture
-            images={interiorImages}
-            onAddImage={handleAddInteriorImage}
-            onRemoveImage={handleRemoveInteriorImage}
-          />
-        </View>
-
-        {/* Photo Guidelines */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Pokyny pro fotografování</Text>
-          <View style={styles.guidelinesList}>
-            {[
-              'Pořizujte jasné, dobře osvětlené fotografie',
-              'Zachyťte více úhlů pro každou oblast',
-              'Zaměřte se na jakékoli poškození nebo vady',
-              'Přiložte detailní záběry problematických oblastí',
-              'Zajistěte, aby fotografie nebyly rozmazané',
-              'Zdokumentujte všechny významné funkce'
-            ].map((guideline, index) => (
-              <View key={index} style={styles.guidelineItem}>
-                <Ionicons name="checkmark-circle" size={16} color="#34C759" />
-                <Text style={styles.guidelineText}>{guideline}</Text>
-              </View>
-            ))}
+          <View style={{ height: 100, backgroundColor: '#F2F2F7', borderRadius: 8, justifyContent: 'center', alignItems: 'center' }}>
+            <Text>Nahrávání fotek - dočasně skryto</Text>
           </View>
         </View>
       </ScrollView>
 
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNav}>
-        <TouchableOpacity 
-          style={[styles.completeButton, loading && styles.completeButtonDisabled]} 
+      {/* Footer Button */}
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.completeBtn, loading && styles.completeBtnDisabled]}
           onPress={handleComplete}
           disabled={loading}
         >
-          <Ionicons name="checkmark" size={20} color="#FFFFFF" />
-          <Text style={styles.completeButtonText}>
+          <Text style={styles.completeBtnText}>
             {loading ? 'Vytváří se...' : 'Dokončit výkup'}
           </Text>
         </TouchableOpacity>
@@ -210,7 +141,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F2F2F7',
   },
-  topHeader: {
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -221,16 +152,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E5E7',
   },
-  backButton: {
-    flexDirection: 'row',
+  backBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 60,
-  },
-  backButtonText: {
-    color: '#007AFF',
-    fontSize: 16,
-    fontWeight: '500',
-    marginLeft: 4,
   },
   headerTitle: {
     fontSize: 18,
@@ -239,74 +165,47 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+    paddingVertical: 16,
   },
   section: {
     backgroundColor: '#FFFFFF',
-    marginTop: 20,
-    paddingVertical: 16,
+    marginVertical: 8,
+    marginHorizontal: 16,
+    borderRadius: 8,
+    padding: 16,
   },
   sectionTitle: {
-    fontSize: 13,
+    fontSize: 16,
     fontWeight: '600',
-    color: '#8E8E93',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    paddingHorizontal: 16,
-    marginBottom: 4,
+    color: '#1A1A1A',
+    marginBottom: 8,
   },
   sectionDescription: {
     fontSize: 14,
     color: '#8E8E93',
-    paddingHorizontal: 16,
     marginBottom: 16,
     lineHeight: 20,
   },
-  summaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-  },
-  summaryText: {
-    fontSize: 16,
-    color: '#1A1A1A',
-    fontWeight: '500',
-    marginLeft: 8,
-  },
-  guidelinesList: {
-    paddingHorizontal: 16,
-  },
-  guidelineItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  guidelineText: {
-    fontSize: 14,
-    color: '#1A1A1A',
-    marginLeft: 8,
-    flex: 1,
-  },
-  bottomNav: {
+  footer: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E5E7',
   },
-  completeButton: {
+  completeBtn: {
     backgroundColor: '#34C759',
     paddingVertical: 16,
-    paddingHorizontal: 24,
     borderRadius: 8,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  completeButtonDisabled: {
-    opacity: 0.5,
+  completeBtnDisabled: {
+    opacity: 0.6,
   },
-  completeButtonText: {
+  completeBtnText: {
     color: '#FFFFFF',
     fontSize: 17,
     fontWeight: '600',
-    marginLeft: 8,
   },
 });

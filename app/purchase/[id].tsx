@@ -5,13 +5,13 @@ import {
   TouchableOpacity, 
   View, 
   Text,
-  Image,
   Alert,
   Modal,
   TextInput,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +22,7 @@ import { mockEmployees } from '@/constants/mockData';
 import { ImageGallery } from '@/components/ImageGallery';
 import { DatePickerField } from '@/components/DatePickerField';
 import { formatSpz } from '@/components/SpzInput';
+import { sharePurchaseDetail } from '@/services/exportService';
 
 const STATUS_OPTIONS: Record<string, { label: string; color: string }> = {
   excellent: { label: 'Výborné', color: '#34C759' },
@@ -50,7 +51,7 @@ const COUNTRY_CODES = [
   { code: '+40', flag: '🇷🇴' },
 ];
 
-const formatPhoneWithFlag = (phone?: string): string | null => {
+const formatPhoneWithFlag = (phone?: string | null): string | null => {
   if (!phone) return null;
   // Find matching country code
   for (const country of COUNTRY_CODES) {
@@ -67,11 +68,25 @@ export default function PurchaseDetailScreen() {
   const { theme } = useTheme();
   const { getPurchaseById, updatePurchase, deletePurchase } = usePurchases();
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  const [selectedDefectImageIndex, setSelectedDefectImageIndex] = useState<number | null>(null);
   // State pro modal dokončení výkupu
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [completePurchasePrice, setCompletePurchasePrice] = useState('');
   const [completePurchaseDate, setCompletePurchaseDate] = useState('');
   const [completeExpectedSalePrice, setCompleteExpectedSalePrice] = useState('');
+  // Cancel modal state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const CANCEL_REASONS = [
+    'Zákazník si to rozmyslel',
+    'Nedohoda o ceně',
+    'Vozidlo již prodáno',
+    'Technický stav nevyhovuje',
+    'Nesoulad v dokumentech',
+    'Nedorazil na prohlídku',
+    'Jiné'
+  ];
+  const [cancelReason, setCancelReason] = useState<string>(CANCEL_REASONS[0]);
+  const [cancelReasonNote, setCancelReasonNote] = useState<string>('');
   const purchase = getPurchaseById(id);
   if (!purchase) {
     return (
@@ -90,7 +105,7 @@ export default function PurchaseDetailScreen() {
     );
   }
 
-  const formatDate = (dateString?: string) => {
+  const formatDate = (dateString?: string | null) => {
     if (!dateString) return null;
     // Zkusíme parsovat český formát dd.mm.yyyy
     const czechMatch = dateString.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
@@ -118,7 +133,7 @@ export default function PurchaseDetailScreen() {
     return dateString;
   };
 
-  const formatAmount = (amount?: number) => {
+  const formatAmount = (amount?: number | null) => {
     if (!amount) return null;
     return new Intl.NumberFormat('cs-CZ', {
       style: 'currency',
@@ -204,10 +219,10 @@ export default function PurchaseDetailScreen() {
   };
 
   const handleCancelPurchase = () => {
-    Alert.alert('Zrušit výkup', 'Opravdu chcete zrušit tento výkup?', [
-      { text: 'Ne', style: 'cancel' },
-      { text: 'Ano, zrušit', style: 'destructive', onPress: () => updatePurchase(purchase.id, { purchaseState: PurchaseState.CANCELLED }) }
-    ]);
+    // Show modal with reasons similar to completion flow
+    setCancelReason(CANCEL_REASONS[0]);
+    setCancelReasonNote('');
+    setShowCancelModal(true);
   };
 
   const handleDeletePurchase = () => {
@@ -230,6 +245,18 @@ export default function PurchaseDetailScreen() {
 
   const employee = mockEmployees.find(emp => emp.id === purchase.employeeId);
 
+  // Fallback car details assembled from flat fields if API didn't provide carDetails
+  const car = purchase.carDetails || {
+    make: (purchase as any).vehicleMake,
+    model: (purchase as any).vehicleModel,
+    year: (purchase as any).vehicleYear ? Number((purchase as any).vehicleYear) : undefined,
+    mileage: (purchase as any).vehicleMileage ? Number((purchase as any).vehicleMileage) : undefined,
+  };
+  const getCancelReasonText = (): string | null => {
+    if (purchase.purchaseState !== PurchaseState.CANCELLED || !purchase.notes) return null;
+    const match = purchase.notes.match(/Důvod zrušení:\s*(.+)/i);
+    return match?.[1]?.trim() || null;
+  };
   const renderInfoRow = (label: string, value?: string | null, icon?: string) => {
     if (!value) return null;
     return (
@@ -271,24 +298,24 @@ export default function PurchaseDetailScreen() {
     );
   };
 
+  const handleExportPurchase = async () => {
+    if (!purchase) return;
+    await sharePurchaseDetail(purchase);
+  };
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
         <TouchableOpacity style={[styles.backButton, { backgroundColor: theme.inputBackground }]} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>Detail výkupu</Text>
-        {purchase.purchaseState === PurchaseState.IN_PROGRESS ? (
-          <TouchableOpacity 
-            style={[styles.moreButton, { backgroundColor: theme.inputBackground }]} 
-            onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
-          >
-            <Ionicons name="create-outline" size={20} color={theme.text} />
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.moreButton} />
-        )}
+        <TouchableOpacity 
+          style={[styles.moreButton, { backgroundColor: theme.inputBackground }]} 
+          onPress={handleExportPurchase}
+        >
+          <Ionicons name="share-social-outline" size={20} color={theme.text} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -300,13 +327,23 @@ export default function PurchaseDetailScreen() {
               onPress={() => setSelectedImageIndex(0)} 
               activeOpacity={0.9}
             >
-              <Image source={{ uri: purchase.images[0] }} style={styles.mainImage} resizeMode="cover" />
+              <ExpoImage 
+                source={{ uri: purchase.images[0] }} 
+                style={styles.mainImage} 
+                contentFit="cover"
+                transition={200}
+                cachePolicy="memory-disk"
+              />
               <View style={styles.imageOverlay}>
                 <View style={[styles.statusBadge, { backgroundColor: getStateColor(purchase.purchaseState) }]}>
-                  <Text style={styles.statusText}>{getStateText(purchase.purchaseState)}</Text>
+                  <Text style={styles.statusText}>
+                    {purchase.purchaseState === PurchaseState.CANCELLED && getCancelReasonText()
+                      ? `Zrušen – ${getCancelReasonText()}`
+                      : getStateText(purchase.purchaseState)}
+                  </Text>
                 </View>
                 <View style={styles.photoCount}>
-                  <Ionicons name="images" size={16} color="#FFFFFF" />
+                  <Ionicons name="car" size={16} color="#FFFFFF" />
                   <Text style={styles.photoCountText}>{purchase.images.length}</Text>
                 </View>
               </View>
@@ -320,25 +357,74 @@ export default function PurchaseDetailScreen() {
                     onPress={() => setSelectedImageIndex(index + 1)} 
                     activeOpacity={0.8}
                   >
-                    <Image source={{ uri: imageUrl }} style={styles.thumbSmallImage} />
+                    <ExpoImage 
+                      source={{ uri: imageUrl }} 
+                      style={styles.thumbSmallImage} 
+                      contentFit="cover" 
+                      transition={150}
+                      cachePolicy="memory-disk"
+                    />
                   </TouchableOpacity>
                 ))}
               </ScrollView>
             )}
           </View>
         )}
+
+        {/* Defect photos section */}
+        {purchase.defectImages && purchase.defectImages.length > 0 && (
+          <View style={[styles.section, styles.tightSection, { backgroundColor: theme.card }]}> 
+            <View style={styles.sectionHeader}>
+              <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}> 
+                <Ionicons name="warning-outline" size={18} color={theme.accent} />
+              </View>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Foto vady</Text>
+              <View style={{ flex: 1 }} />
+              <View style={[styles.photoCount, { backgroundColor: 'transparent' }]}> 
+                <Ionicons name="images" size={16} color={theme.textSecondary} />
+                <Text style={[styles.photoCountText, { color: theme.textSecondary }]}>{purchase.defectImages.length}</Text>
+              </View>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.defectThumbsRow}
+            >
+              {purchase.defectImages.map((imageUrl, index) => (
+                <TouchableOpacity 
+                  key={`def-${index}`} 
+                  style={styles.thumbSmall} 
+                  onPress={() => setSelectedDefectImageIndex(index)} 
+                  activeOpacity={0.8}
+                >
+                  <ExpoImage 
+                    source={{ uri: imageUrl }} 
+                    style={styles.thumbSmallImage} 
+                    contentFit="cover" 
+                    transition={150}
+                    cachePolicy="memory-disk"
+                  />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
         {/* Hero Card */}
         <View style={[styles.heroCard, { backgroundColor: theme.card }]}>
           {!(purchase.images && purchase.images.length > 0) && (
             <View style={[styles.statusBadge, { backgroundColor: getStateColor(purchase.purchaseState), alignSelf: 'flex-start', marginBottom: 12 }]}>
-              <Text style={styles.statusText}>{getStateText(purchase.purchaseState)}</Text>
+              <Text style={styles.statusText}>
+                {purchase.purchaseState === PurchaseState.CANCELLED && getCancelReasonText()
+                  ? `Zrušen – ${getCancelReasonText()}`
+                  : getStateText(purchase.purchaseState)}
+              </Text>
             </View>
           )}
 
-          {purchase.carDetails && (
+          {(car as any) && (car.make || car.model || car.year) && (
             <Text style={[styles.vehicleNameLarge, { color: theme.text }]}>
-              {purchase.carDetails.make} {purchase.carDetails.model}
-              {purchase.carDetails.year && ` (${purchase.carDetails.year})`}
+              {car.make} {car.model}
+              {car.year && ` (${car.year})`}
             </Text>
           )}
 
@@ -351,7 +437,7 @@ export default function PurchaseDetailScreen() {
             </View>
             <View style={[styles.heroStatDivider, { backgroundColor: theme.border }]} />
             <View style={styles.heroStat}>
-              <Text style={[styles.heroStatValue, { color: theme.text }]}>{purchase.carDetails?.mileage?.toLocaleString() || '—'}</Text>
+              <Text style={[styles.heroStatValue, { color: theme.text }]}>{car?.mileage ? Number(car.mileage).toLocaleString() : '—'}</Text>
               <Text style={[styles.heroStatLabel, { color: theme.textSecondary }]}>Kilometrů</Text>
             </View>
           </View>
@@ -374,61 +460,29 @@ export default function PurchaseDetailScreen() {
           {renderBooleanRow('VIN prověřen', purchase.vinVerified, 'shield-checkmark-outline')}
           {renderInfoRow('Odkud zná', purchase.sourceKnowledge, 'megaphone-outline')}
         </View>
-
-        {/* Vozidlo */}
-        {purchase.carDetails && (
+        {/* Informace o vozidle */}
+        {(car && (car.make || car.model || (car as any).vin || car.mileage || (car as any).fuelType || (car as any).transmission || (car as any).bodyType || (car as any).driveType || (car as any).color || (car as any).stk || (car as any).firstRegistration)) && (
           <View style={[styles.section, { backgroundColor: theme.card }]}>
             <View style={styles.sectionHeader}>
               <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
                 <Ionicons name="car-sport" size={18} color={theme.accent} />
               </View>
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>Údaje o vozidle</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Informace o vozidle</Text>
             </View>
-            {renderInfoRow('Značka', purchase.carDetails.make, 'logo-model-s')}
-            {renderInfoRow('Model', purchase.carDetails.model, 'car-outline')}
-            {renderInfoRow('VIN', purchase.carDetails.vin, 'barcode-outline')}
-            {renderInfoRow('Rok výroby', purchase.carDetails.year?.toString(), 'calendar-number-outline')}
-            {renderInfoRow('Barva', purchase.carDetails.color, 'color-palette-outline')}
-            {renderInfoRow('Palivo', purchase.carDetails.fuelType, 'flash-outline')}
-            {renderInfoRow('Výkon', purchase.carDetails.engineSize, 'speedometer-outline')}
-            {renderInfoRow('Převodovka', purchase.carDetails.transmission, 'cog-outline')}
-            {renderInfoRow('Karoserie', purchase.carDetails.bodyType, 'cube-outline')}
-            {renderInfoRow('Pohon', purchase.carDetails.driveType, 'git-branch-outline')}
-            {renderInfoRow('Kilometry', purchase.carDetails.mileage ? `${purchase.carDetails.mileage.toLocaleString()} km` : undefined, 'navigate-outline')}
-            {renderInfoRow('STK do', purchase.carDetails.stk, 'shield-outline')}
-            {renderInfoRow('Do provozu', purchase.carDetails.firstRegistration, 'flag-outline')}
-            {renderBooleanRow('Dovoz', purchase.carDetails.isImport, 'airplane-outline')}
-            {renderBooleanRow('První majitel', purchase.carDetails.isFirstOwner, 'person-add-outline')}
-            {renderBooleanRow('Servisní knížka', purchase.carDetails.hasServiceBook, 'book-outline')}
-            {renderBooleanRow('Bezp. šrouby', purchase.carDetails.hasSecurityScrews, 'lock-closed-outline')}
-            {renderBooleanRow('Kola AI', purchase.carDetails.hasAiWheels, 'ellipse-outline')}
-          </View>
-        )}
-
-        {/* Stav součástí */}
-        {purchase.componentStatuses && purchase.componentStatuses.length > 0 && (
-          <View style={[styles.section, { backgroundColor: theme.card }]}>
-            <View style={styles.sectionHeader}>
-              <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
-                <Ionicons name="list" size={18} color={theme.accent} />
-              </View>
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>Stav součástí</Text>
-            </View>
-            {purchase.componentStatuses.map((cs, index) => {
-              const statusInfo = STATUS_OPTIONS[cs.status] || STATUS_OPTIONS.good;
-              return (
-                <View key={index} style={[styles.componentRow, { borderBottomColor: theme.borderLight }]}>
-                  <View style={styles.componentInfo}>
-                    <Text style={[styles.componentName, { color: theme.text }]}>{cs.component}</Text>
-                    {cs.notes && <Text style={[styles.componentNotes, { color: theme.textTertiary }]}>{cs.notes}</Text>}
-                  </View>
-                  <View style={[styles.componentStatus, { backgroundColor: statusInfo.color + '20' }]}>
-                    <View style={[styles.statusDot, { backgroundColor: statusInfo.color }]} />
-                    <Text style={[styles.componentStatusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
-                  </View>
-                </View>
-              );
-            })}
+            {renderInfoRow('Značka / Model', [car.make, car.model].filter(Boolean).join(' '), 'pricetag-outline')}
+            {renderInfoRow('VIN', (car as any).vin, 'barcode-outline')}
+            {renderInfoRow('Barva', (car as any).color, 'color-palette-outline')}
+            {renderInfoRow('Palivo', (car as any).fuelType, 'flame-outline')}
+            {renderInfoRow('Převodovka', (car as any).transmission, 'swap-vertical-outline')}
+            {renderInfoRow('Karoserie', (car as any).bodyType, 'cube-outline')}
+            {renderInfoRow('Pohon', (car as any).driveType, 'compass-outline')}
+            {renderInfoRow('STK', (car as any).stk, 'calendar-outline')}
+            {renderInfoRow('První registrace', (car as any).firstRegistration, 'time-outline')}
+            {renderBooleanRow('Dovoz', (car as any).isImport, 'airplane-outline')}
+            {renderBooleanRow('První majitel', (car as any).isFirstOwner, 'person-circle-outline')}
+            {renderBooleanRow('Servisní knížka', (car as any).hasServiceBook, 'book-outline')}
+            {renderBooleanRow('Bezpečnostní šrouby', (car as any).hasSecurityScrews, 'lock-closed-outline')}
+            {renderBooleanRow('Kola AI', (car as any).hasAiWheels, 'hardware-chip-outline')}
           </View>
         )}
 
@@ -444,6 +498,39 @@ export default function PurchaseDetailScreen() {
             <View style={[styles.notesBox, { backgroundColor: theme.inputBackground }]}>
               <Text style={[styles.notesText, { color: theme.text }]}>{purchase.notes}</Text>
             </View>
+          </View>
+        )}
+
+        {/* Stav součástí */}
+        {Array.isArray((purchase as any).componentStatuses) && (purchase as any).componentStatuses.length > 0 && (
+          <View style={[styles.section, { backgroundColor: theme.card }]}>
+            <View style={styles.sectionHeader}>
+              <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
+                <Ionicons name="construct-outline" size={18} color={theme.accent} />
+              </View>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Stav součástí</Text>
+            </View>
+
+            {(purchase as any).componentStatuses.map((item: any, idx: number) => {
+              const statusKey = String(item.status || 'good');
+              const conf = STATUS_OPTIONS[statusKey] || STATUS_OPTIONS['good'];
+              return (
+                <View key={`${item.component}-${idx}`} style={[styles.componentRow, { borderBottomColor: theme.borderLight }]}>
+                  <View style={styles.componentInfo}>
+                    <Text style={[styles.componentName, { color: theme.text }]}>{item.component}</Text>
+                    {item.notes ? (
+                      <View style={[styles.componentNoteBox, { borderColor: theme.border, backgroundColor: theme.inputBackground }]}>
+                        <Text style={[styles.componentNoteText, { color: theme.text }]}>{item.notes}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={[styles.componentStatus, { backgroundColor: conf.color + '20' }]}>
+                    <View style={[styles.statusDot, { backgroundColor: conf.color }]} />
+                    <Text style={[styles.componentStatusText, { color: conf.color }]}>{conf.label}</Text>
+                  </View>
+                </View>
+              );
+            })}
           </View>
         )}
 
@@ -469,6 +556,23 @@ export default function PurchaseDetailScreen() {
           {renderInfoRow('Město', purchase.city, 'map-outline')}
           {renderInfoRow('PSČ', purchase.postalCode, 'pin-outline')}
         </View>
+
+        {/* Protiúčet – detail vybraného vozu (moved below Client section) */}
+        {purchase.isCounterAccount && (purchase as any).counterAccountCar && (
+          <View style={[styles.section, { backgroundColor: theme.card }]}>
+            <View style={styles.sectionHeader}>
+              <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
+                <Ionicons name="swap-horizontal" size={18} color={theme.accent} />
+              </View>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Protiúčet</Text>
+            </View>
+            {renderInfoRow('Značka', (purchase as any).counterAccountCar.make, 'car-sport-outline')}
+            {renderInfoRow('Model', (purchase as any).counterAccountCar.model, 'car-outline')}
+            {renderInfoRow('Motorizace', (purchase as any).counterAccountCar.variant, 'speedometer-outline')}
+            {renderInfoRow('Cena', (purchase as any).counterAccountCar.price ?
+              new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'CZK', maximumFractionDigits: 0 }).format((purchase as any).counterAccountCar.price) : undefined, 'cash-outline')}
+          </View>
+        )}
 
         {/* Pracovník */}
         {employee && (
@@ -524,13 +628,23 @@ export default function PurchaseDetailScreen() {
         <View style={styles.bottomSpacer} />
       </ScrollView>
 
-      {/* Image Gallery Modal */}
+      {/* Image Gallery Modal - Main photos */}
       {selectedImageIndex !== null && purchase.images && (
         <ImageGallery
           images={purchase.images}
           visible={true}
           initialIndex={selectedImageIndex}
           onClose={() => setSelectedImageIndex(null)}
+        />
+      )}
+
+      {/* Image Gallery Modal - Defect photos */}
+      {selectedDefectImageIndex !== null && purchase.defectImages && (
+        <ImageGallery
+          images={purchase.defectImages}
+          visible={true}
+          initialIndex={selectedDefectImageIndex}
+          onClose={() => setSelectedDefectImageIndex(null)}
         />
       )}
 
@@ -620,6 +734,94 @@ export default function PurchaseDetailScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Modal pro zrušení výkupu */}
+      <Modal
+        visible={showCancelModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCancelModal(false)}
+      >
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity 
+            style={styles.modalBackdrop} 
+            activeOpacity={1} 
+            onPress={() => setShowCancelModal(false)}
+          />
+          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconWrapper, { backgroundColor: theme.error + '20' }]}>
+                <Ionicons name="close-circle" size={28} color={theme.error} />
+              </View>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Zrušit výkup</Text>
+              <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>Vyberte důvod zrušení</Text>
+            </View>
+
+            <View style={styles.modalForm}>
+              {/* Reasons list */}
+              {CANCEL_REASONS.map((reason) => (
+                <TouchableOpacity
+                  key={reason}
+                  style={[styles.optionRow, { borderBottomColor: theme.border }]}
+                  onPress={() => setCancelReason(reason)}
+                >
+                  <Text style={[styles.optionLabel, { color: theme.text }]}>{reason}</Text>
+                  <Ionicons
+                    name={cancelReason === reason ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={theme.accent}
+                  />
+                </TouchableOpacity>
+              ))}
+
+              {/* Note for custom reason */}
+              {cancelReason === 'Jiné' && (
+                <View style={styles.modalInputGroup}>
+                  <Text style={[styles.modalLabel, { color: theme.textSecondary }]}>Upřesnění důvodu</Text>
+                  <View style={[styles.modalInputWrapper, { backgroundColor: theme.inputBackground, borderColor: theme.border }]}>
+                    <TextInput
+                      style={[styles.modalInput, { color: theme.text }]}
+                      value={cancelReasonNote}
+                      onChangeText={setCancelReasonNote}
+                      placeholder="Napište důvod..."
+                      placeholderTextColor={theme.textTertiary}
+                      returnKeyType="done"
+                    />
+                  </View>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalButtonSecondary, { backgroundColor: theme.inputBackground }]}
+                onPress={() => setShowCancelModal(false)}
+              >
+                <Text style={[styles.modalButtonSecondaryText, { color: theme.text }]}>Zpět</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButtonPrimary, { backgroundColor: theme.error }]}
+                onPress={() => {
+                  const reasonText = cancelReason === 'Jiné' && cancelReasonNote.trim() ? cancelReasonNote.trim() : cancelReason;
+                  const notesPrefix = purchase.notes ? purchase.notes + '\n' : '';
+                  updatePurchase(purchase.id, { 
+                    purchaseState: PurchaseState.CANCELLED,
+                    notes: `${notesPrefix}Důvod zrušení: ${reasonText}`,
+                  });
+                  setShowCancelModal(false);
+                  Alert.alert('Zrušeno', 'Výkup byl zrušen');
+                }}
+              >
+                <Ionicons name="close" size={20} color="#FFFFFF" />
+                <Text style={styles.modalButtonPrimaryText}>Zrušit výkup</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -644,6 +846,12 @@ const styles = StyleSheet.create({
   photoCount: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, gap: 4 },
   photoCountText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   thumbsRow: { paddingHorizontal: 16, paddingTop: 8, gap: 8 },
+  defectThumbsRow: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 0,
+    gap: 8,
+  },
   thumbSmall: { width: 72, height: 72, borderRadius: 8, overflow: 'hidden' },
   thumbSmallImage: { width: '100%', height: '100%' },
   // Hero Card
@@ -658,6 +866,9 @@ const styles = StyleSheet.create({
   heroStatLabel: { fontSize: 13 },
   heroStatDivider: { width: 1, height: 40, marginHorizontal: 16 },
   section: { marginHorizontal: 16, marginBottom: 16, borderRadius: 16, overflow: 'hidden' },
+  tightSection: {
+    paddingBottom: 8,
+  },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 12, gap: 12 },
   sectionIconWrapper: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { fontSize: 16, fontWeight: '600' },
@@ -671,6 +882,10 @@ const styles = StyleSheet.create({
   componentInfo: { flex: 1, marginRight: 12 },
   componentName: { fontSize: 15, fontWeight: '500' },
   componentNotes: { fontSize: 12, marginTop: 2 },
+  noteHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  noteHeaderText: { fontSize: 12, fontWeight: '600' },
+  componentNoteBox: { marginTop: 6, padding: 10, borderRadius: 10, borderWidth: 1 },
+  componentNoteText: { fontSize: 13, lineHeight: 18 },
   componentStatus: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, gap: 6 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   componentStatusText: { fontSize: 12, fontWeight: '600' },
@@ -682,6 +897,10 @@ const styles = StyleSheet.create({
   employeeRole: { fontSize: 14 },
   notesBox: { marginHorizontal: 16, marginBottom: 16, padding: 14, borderRadius: 10 },
   notesText: { fontSize: 15, lineHeight: 22 },
+  defectPhotosRow: { paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
+  defectPhotoThumbnail: { width: 140, height: 140, borderRadius: 12, overflow: 'hidden', position: 'relative' },
+  defectPhotoImage: { width: '100%', height: '100%' },
+  defectPhotoOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' },
   actionsSection: { paddingHorizontal: 16, gap: 12 },
   editButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderRadius: 12, borderWidth: 1.5, gap: 8 },
   editButtonText: { fontSize: 16, fontWeight: '600' },
@@ -711,4 +930,6 @@ const styles = StyleSheet.create({
   modalButtonSecondaryText: { fontSize: 16, fontWeight: '600' },
   modalButtonPrimary: { flex: 1, flexDirection: 'row', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 8 },
   modalButtonPrimaryText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  optionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, paddingHorizontal: 12 },
+  optionLabel: { fontSize: 15 },
 });

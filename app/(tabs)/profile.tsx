@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,11 +6,17 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Switch,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { PurchaseState } from '@/constants/types';
 import { mockEmployees } from '@/constants/mockData';
 import { 
@@ -18,11 +24,60 @@ import {
   sendPurchaseStatusNotification,
 } from '@/services/notificationService';
 
+interface NotificationSettings {
+  statusChanges: boolean;
+  reminders: boolean;
+  reports: boolean;
+  reminderTime: string;
+}
+
+const NOTIFICATION_SETTINGS_KEY = 'notification_settings';
+
 export default function ProfileScreen() {
   const { theme, isDark, themeMode, setThemeMode } = useTheme();
   const { purchases } = usePurchases();
+  const { user, logout, changePassword } = useAuth();
   const currentEmployee = mockEmployees.find(emp => emp.id === '1');
   const myPurchases = purchases.filter(p => p.employeeId === '1');
+
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
+    statusChanges: true,
+    reminders: true,
+    reports: true,
+    reminderTime: '09:00',
+  });
+
+  useEffect(() => {
+    loadNotificationSettings();
+  }, []);
+
+  const loadNotificationSettings = async () => {
+    try {
+      const saved = await AsyncStorage.getItem(NOTIFICATION_SETTINGS_KEY);
+      if (saved) {
+        setNotificationSettings(JSON.parse(saved));
+      }
+    } catch (error) {
+      console.error('[Profile] Chyba při načítání nastavení notifikací:', error);
+    }
+  };
+
+  const saveNotificationSettings = async (settings: NotificationSettings) => {
+    try {
+      await AsyncStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(settings));
+      setNotificationSettings(settings);
+      Alert.alert('Úspěch', 'Nastavení notifikací bylo uloženo');
+    } catch (error) {
+      console.error('[Profile] Chyba při ukládání nastavení notifikací:', error);
+      Alert.alert('Chyba', 'Nepodařilo se uložit nastavení');
+    }
+  };
+
+  const updateSetting = (key: keyof NotificationSettings, value: boolean | string) => {
+    const updated = { ...notificationSettings, [key]: value };
+    setNotificationSettings(updated);
+  };
 
   const getStatsForState = (state: PurchaseState) => {
     return myPurchases.filter(p => p.purchaseState === state).length;
@@ -50,13 +105,13 @@ export default function ProfileScreen() {
     );
   };
 
-  const handleNotificationSettings = async () => {
-    const token = await registerForPushNotifications();
-    if (token) {
-      Alert.alert('Notifikace', 'Notifikace jsou povoleny.\n\nPush token byl zaregistrován.');
-    } else {
-      Alert.alert('Notifikace', 'Notifikace nejsou povoleny nebo zařízení je simulátor.');
-    }
+  const handleOpenNotificationSettings = () => {
+    setShowNotificationModal(true);
+  };
+
+  const handleSaveNotificationSettings = async () => {
+    await saveNotificationSettings(notificationSettings);
+    setShowNotificationModal(false);
   };
 
   const handleTestNotification = async () => {
@@ -110,6 +165,16 @@ export default function ProfileScreen() {
     </TouchableOpacity>
   );
 
+  const confirmLogout = () => {
+    Alert.alert(
+      'Odhlásit',
+      'Opravdu se chcete odhlásit?',
+      [
+        { text: 'Zrušit', style: 'cancel' },
+        { text: 'Ano', style: 'destructive', onPress: () => logout() },
+      ]
+    );
+  };
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -160,7 +225,7 @@ export default function ProfileScreen() {
             'notifications',
             'Notifikace',
             'Nastavení upozornění',
-            handleNotificationSettings
+            handleOpenNotificationSettings
           )}
           {renderMenuItem(
             'flask',
@@ -182,7 +247,7 @@ export default function ProfileScreen() {
 
         <TouchableOpacity 
           style={[styles.logoutButton, { backgroundColor: theme.surface }]}
-          onPress={() => Alert.alert('Odhlásit', 'Opravdu se chcete odhlásit?')}
+          onPress={confirmLogout}
         >
           <Ionicons name="log-out" size={22} color={theme.error} />
           <Text style={[styles.logoutText, { color: theme.error }]}>Odhlásit se</Text>
@@ -190,6 +255,121 @@ export default function ProfileScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      {/* Notification Settings Modal */}
+      <Modal
+        visible={showNotificationModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowNotificationModal(false)}
+      >
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity 
+            style={styles.modalBackdrop} 
+            activeOpacity={1} 
+            onPress={() => setShowNotificationModal(false)}
+          />
+          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconWrapper, { backgroundColor: theme.accent + '20' }]}>
+                <Ionicons name="notifications" size={28} color={theme.accent} />
+              </View>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Nastavení notifikací</Text>
+              <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
+                Vyberte, jaké notifikace chcete dostávat
+              </Text>
+            </View>
+
+            <View style={styles.notificationItems}>
+              {/* Status Changes */}
+              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Změny stavu výkupů
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Dostaňte upozornění na změny stavu výkupů
+                  </Text>
+                </View>
+                <Switch
+                  value={notificationSettings.statusChanges}
+                  onValueChange={(value) => updateSetting('statusChanges', value)}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={notificationSettings.statusChanges ? theme.accent : theme.textTertiary}
+                />
+              </View>
+
+              {/* Reminders */}
+              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Připomínky
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Denní připomínky na nedokončené výkupy
+                  </Text>
+                </View>
+                <Switch
+                  value={notificationSettings.reminders}
+                  onValueChange={(value) => updateSetting('reminders', value)}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={notificationSettings.reminders ? theme.accent : theme.textTertiary}
+                />
+              </View>
+
+              {/* Reminder Time */}
+              {notificationSettings.reminders && (
+                <View style={[styles.notificationTimeItem, { backgroundColor: theme.inputBackground }]}>
+                  <Ionicons name="time" size={20} color={theme.accent} />
+                  <Text style={[styles.notificationTimeLabel, { color: theme.text }]}>
+                    Čas připomínky
+                  </Text>
+                  <Text style={[styles.notificationTimeValue, { color: theme.accent }]}>
+                    {notificationSettings.reminderTime}
+                  </Text>
+                </View>
+              )}
+
+              {/* Reports */}
+              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Reporty
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Týdenní a měsíční reporty
+                  </Text>
+                </View>
+                <Switch
+                  value={notificationSettings.reports}
+                  onValueChange={(value) => updateSetting('reports', value)}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={notificationSettings.reports ? theme.accent : theme.textTertiary}
+                />
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalButtonSecondary, { backgroundColor: theme.inputBackground }]}
+                onPress={() => setShowNotificationModal(false)}
+              >
+                <Text style={[styles.modalButtonSecondaryText, { color: theme.text }]}>Zrušit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButtonPrimary, { backgroundColor: theme.accent }]}
+                onPress={handleSaveNotificationSettings}
+              >
+                <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                <Text style={styles.modalButtonPrimaryText}>Uložit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -316,5 +496,111 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 32,
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 32,
+    zIndex: 1,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalIconWrapper: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+  },
+  notificationItems: {
+    marginBottom: 24,
+  },
+  notificationItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  notificationInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  notificationTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  notificationDescription: {
+    fontSize: 13,
+  },
+  notificationTimeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginVertical: 8,
+    gap: 12,
+  },
+  notificationTimeLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  notificationTimeValue: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButtonSecondary: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonSecondaryText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalButtonPrimary: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modalButtonPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

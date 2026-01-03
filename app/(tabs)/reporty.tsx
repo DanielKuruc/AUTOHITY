@@ -5,25 +5,42 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Share,
   Alert,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { PurchaseState } from '@/constants/types';
+import { sharePurchasesList } from '@/services/exportService';
+import { DatePickerField } from '@/components/DatePickerField';
 
-type ReportPeriod = 'week' | 'month' | 'quarter';
+type ReportPeriod = 'week' | 'month' | 'quarter' | 'custom';
 
 export default function ReportyScreen() {
   const { theme } = useTheme();
   const { purchases } = usePurchases();
   const [selectedPeriod, setSelectedPeriod] = useState<ReportPeriod>('month');
+  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+
+  const parseCustomDate = (dateString: string): Date | null => {
+    if (!dateString) return null;
+    // Format: dd.mm.yyyy
+    const parts = dateString.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (!parts) return null;
+    const [, day, month, year] = parts;
+    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+  };
 
   const reportData = useMemo(() => {
     const now = new Date();
     let startDate: Date;
+    let endDate: Date = now;
     let periodLabel: string;
 
     switch (selectedPeriod) {
@@ -41,9 +58,23 @@ export default function ReportyScreen() {
         startDate = new Date(now.getFullYear(), quarter * 3, 1);
         periodLabel = 'Čtvrtletní report';
         break;
+      case 'custom':
+        const parsedStart = parseCustomDate(customStartDate);
+        const parsedEnd = parseCustomDate(customEndDate);
+        startDate = parsedStart || new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = parsedEnd || now;
+        periodLabel = 'Vlastní report';
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        periodLabel = 'Měsíční report';
     }
 
-    const periodPurchases = purchases.filter(p => new Date(p.purchaseDate) >= startDate);
+    const periodPurchases = purchases.filter(p => {
+      if (!p.purchaseDate) return false;
+      const purchaseDate = new Date(p.purchaseDate);
+      return purchaseDate >= startDate && purchaseDate <= endDate;
+    });
 
     const byState = {
       new: periodPurchases.filter(p => p.purchaseState === PurchaseState.NEW).length,
@@ -71,7 +102,7 @@ export default function ReportyScreen() {
     return {
       periodLabel,
       startDate: startDate.toLocaleDateString('cs-CZ'),
-      endDate: now.toLocaleDateString('cs-CZ'),
+      endDate: endDate.toLocaleDateString('cs-CZ'),
       total: periodPurchases.length,
       byState,
       totalValue,
@@ -82,7 +113,7 @@ export default function ReportyScreen() {
         : 0,
       topMakes,
     };
-  }, [purchases, selectedPeriod]);
+  }, [purchases, selectedPeriod, customStartDate, customEndDate]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('cs-CZ', {
@@ -92,60 +123,59 @@ export default function ReportyScreen() {
     }).format(amount);
   };
 
-  const generateReportText = () => {
-    return `
-${reportData.periodLabel}
-Období: ${reportData.startDate} - ${reportData.endDate}
-
-SOUHRN VÝKUPŮ
-━━━━━━━━━━━━━━━━━━━━
-Celkem výkupů: ${reportData.total}
-• Nové: ${reportData.byState.new}
-• Probíhající: ${reportData.byState.inProgress}
-• Dokončené: ${reportData.byState.completed}
-• Zrušené: ${reportData.byState.cancelled}
-
-FINANČNÍ ÚDAJE
-━━━━━━━━━━━━━━━━━━━━
-Celková hodnota: ${formatCurrency(reportData.totalValue)}
-Dokončené: ${formatCurrency(reportData.completedValue)}
-Průměrná hodnota: ${formatCurrency(reportData.avgValue)}
-Úspěšnost: ${reportData.successRate.toFixed(1)}%
-
-TOP ZNAČKY
-━━━━━━━━━━━━━━━━━━━━
-${reportData.topMakes.map((m, i) => `${i + 1}. ${m[0]}: ${m[1]} výkupů`).join('\n')}
-
-━━━━━━━━━━━━━━━━━━━━
-Vygenerováno: ${new Date().toLocaleString('cs-CZ')}
-AutoHity - Systém výkupů
-    `.trim();
-  };
-
-  const handleShare = async () => {
+  const handleExport = async () => {
     try {
-      await Share.share({
-        message: generateReportText(),
-        title: reportData.periodLabel,
-      });
+      const now = new Date();
+      let startDate = new Date(now);
+      let periodName = 'Report';
+      switch (selectedPeriod) {
+        case 'week':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 7);
+          periodName = 'Týdenní report';
+          break;
+        case 'month':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          periodName = 'Měsíční report';
+          break;
+        case 'quarter':
+          const quarter = Math.floor(now.getMonth() / 3);
+          startDate = new Date(now.getFullYear(), quarter * 3, 1);
+          periodName = 'Čtvrtletní report';
+          break;
+      }
+
+      const periodPurchases = purchases.filter(p => p.purchaseDate && new Date(p.purchaseDate) >= startDate);
+
+      if (periodPurchases.length === 0) {
+        Alert.alert('Info', 'Žádné výkupy k exportu za vybrané období');
+        return;
+      }
+
+      await sharePurchasesList(periodPurchases, periodName);
     } catch (error) {
-      Alert.alert('Chyba', 'Nepodařilo se sdílet report');
+      console.error('[Reporty] Chyba při exportu:', error);
+      Alert.alert('Chyba', 'Nepodařilo se exportovat report');
     }
   };
 
-  const handleExport = () => {
-    Alert.alert(
-      'Export reportu',
-      'Vyberte formát exportu:',
-      [
-        { text: 'Zrušit', style: 'cancel' },
-        { text: 'Sdílet text', onPress: handleShare },
-        { 
-          text: 'PDF (brzy)', 
-          onPress: () => Alert.alert('Info', 'Export do PDF bude dostupný v další verzi.')
-        },
-      ]
-    );
+  const handleApplyCustomDates = () => {
+    if (!customStartDate || !customEndDate) {
+      Alert.alert('Chyba', 'Prosím vyberte obě data');
+      return;
+    }
+    const startDate = parseCustomDate(customStartDate);
+    const endDate = parseCustomDate(customEndDate);
+    if (!startDate || !endDate) {
+      Alert.alert('Chyba', 'Neplatný formát datumu (dd.mm.yyyy)');
+      return;
+    }
+    if (startDate > endDate) {
+      Alert.alert('Chyba', 'Počáteční datum musí být před koncovým datem');
+      return;
+    }
+    setSelectedPeriod('custom');
+    setShowCustomModal(false);
   };
 
   const renderPeriodButton = (period: ReportPeriod, label: string) => (
@@ -156,7 +186,13 @@ AutoHity - Systém výkupů
           backgroundColor: selectedPeriod === period ? theme.accent : theme.inputBackground,
         }
       ]}
-      onPress={() => setSelectedPeriod(period)}
+      onPress={() => {
+        if (period === 'custom') {
+          setShowCustomModal(true);
+        } else {
+          setSelectedPeriod(period);
+        }
+      }}
     >
       <Text
         style={[
@@ -209,6 +245,7 @@ AutoHity - Systém výkupů
           {renderPeriodButton('week', 'Týden')}
           {renderPeriodButton('month', 'Měsíc')}
           {renderPeriodButton('quarter', 'Čtvrtletí')}
+          {renderPeriodButton('custom', 'Vlastní')}
         </View>
 
         {/* Summary Card */}
@@ -310,6 +347,68 @@ AutoHity - Systém výkupů
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+
+      {/* Custom Date Range Modal */}
+      <Modal
+        visible={showCustomModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCustomModal(false)}
+      >
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity 
+            style={styles.modalBackdrop} 
+            activeOpacity={1} 
+            onPress={() => setShowCustomModal(false)}
+          />
+          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconWrapper, { backgroundColor: theme.accent + '20' }]}>
+                <Ionicons name="calendar" size={28} color={theme.accent} />
+              </View>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Vlastní rozsah dat</Text>
+              <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
+                Vyberte počáteční a koncové datum
+              </Text>
+            </View>
+
+            <View style={styles.modalForm}>
+              <DatePickerField
+                label="Počáteční datum"
+                value={customStartDate}
+                onChange={setCustomStartDate}
+                placeholder="dd.mm.yyyy"
+              />
+
+              <DatePickerField
+                label="Koncové datum"
+                value={customEndDate}
+                onChange={setCustomEndDate}
+                placeholder="dd.mm.yyyy"
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalButtonSecondary, { backgroundColor: theme.inputBackground }]}
+                onPress={() => setShowCustomModal(false)}
+              >
+                <Text style={[styles.modalButtonSecondaryText, { color: theme.text }]}>Zrušit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButtonPrimary, { backgroundColor: theme.accent }]}
+                onPress={handleApplyCustomDates}
+              >
+                <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                <Text style={styles.modalButtonPrimaryText}>Použít</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -489,5 +588,75 @@ const styles = StyleSheet.create({
   },
   bottomSpacer: {
     height: 32,
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 32,
+    zIndex: 1,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalIconWrapper: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+  },
+  modalForm: {
+    gap: 16,
+    marginBottom: 24,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButtonSecondary: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonSecondaryText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalButtonPrimary: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modalButtonPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

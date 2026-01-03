@@ -13,7 +13,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { PurchaseCard } from '@/components/PurchaseCard';
 import { NewPurchaseModal, PurchaseInitData } from '@/components/NewPurchaseModal';
-import { VinScanner } from '@/components/VinScanner';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Purchase } from '@/constants/types';
@@ -22,14 +21,14 @@ import { mockEmployees } from '@/constants/mockData';
 export default function PurchasesScreen() {
   const { theme } = useTheme();
   const [showNewPurchaseModal, setShowNewPurchaseModal] = useState(false);
-  const [showVinScanner, setShowVinScanner] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const { 
     filteredPurchases, 
     filter, 
     refreshing, 
-    refreshPurchases 
+    refreshPurchases,
+    setInitData
   } = usePurchases();
 
   // Filtrování podle vyhledávání
@@ -54,32 +53,12 @@ export default function PurchasesScreen() {
     setShowNewPurchaseModal(true);
   };
 
-  const handleVinScan = () => {
-    setShowVinScanner(true);
-  };
-
-  const handleVinDetected = (vin: string) => {
-    setShowVinScanner(false);
-    router.push({
-      pathname: '/new-purchase',
-      params: { vin },
-    });
-  };
   const handleCreatePurchase = (data: PurchaseInitData) => {
+    setInitData(data);
     setShowNewPurchaseModal(false);
-    router.push({
-      pathname: '/new-purchase',
-      params: {
-        vin: data.vin,
-        firstName: data.firstName || '',
-        lastName: data.lastName || '',
-        companyName: data.companyName || '',
-        isCompany: data.isCompany ? '1' : '0',
-        ico: data.ico || '',
-        vehicleData: data.vehicleData ? JSON.stringify(data.vehicleData) : '',
-        companyData: data.companyData ? JSON.stringify(data.companyData) : '',
-      },
-    });
+    
+    // Navigate immediately
+    router.push('/new-purchase');
   };
 
   const handleCreateEmpty = () => {
@@ -160,12 +139,6 @@ export default function PurchasesScreen() {
               />
             </TouchableOpacity>
             <TouchableOpacity 
-              style={[styles.iconButton, { backgroundColor: theme.inputBackground }]}
-              onPress={handleVinScan}
-            >
-              <Ionicons name="scan" size={20} color={theme.text} />
-            </TouchableOpacity>
-            <TouchableOpacity 
               style={[
                 styles.iconButton, 
                 { backgroundColor: activeFiltersCount > 0 ? theme.accent : theme.inputBackground }
@@ -242,13 +215,6 @@ export default function PurchasesScreen() {
         onClose={() => setShowNewPurchaseModal(false)}
         onCreatePurchase={handleCreatePurchase}
         onCreateEmpty={handleCreateEmpty}
-      />
-
-      {/* VIN Scanner */}
-      <VinScanner
-        visible={showVinScanner}
-        onClose={() => setShowVinScanner(false)}
-        onVinDetected={handleVinDetected}
       />
     </SafeAreaView>
   );

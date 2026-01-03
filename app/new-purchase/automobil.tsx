@@ -12,6 +12,8 @@ import {
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SelectionPicker } from '@/components/SelectionPicker';
+import CounterAccountPicker from '@/components/CounterAccountPicker';
+import { Base44Car } from '@/services/base44Api';
 import {
   VEHICLE_MAKES,
   VEHICLE_MODELS,
@@ -40,10 +42,19 @@ export default function AutomobilScreen() {
     prvniMajitel: false,
     servisniKnizka: false,
     bezpecnostniSrouby: false,
+    protiucet: false,
   });
+
+  const [showCounterPicker, setShowCounterPicker] = useState(false);
+  const [counterCar, setCounterCar] = useState<Base44Car | null>(null);
 
   const updateField = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    if (field === 'protiucet') {
+      const enabled = Boolean(value);
+      if (enabled) setShowCounterPicker(true);
+      if (!enabled) setCounterCar(null);
+    }
   };
 
   const handleNext = () => {
@@ -238,6 +249,29 @@ export default function AutomobilScreen() {
             formData.bezpecnostniSrouby,
             (value) => updateField('bezpecnostniSrouby', value)
           )}
+
+          {renderToggleField(
+            'Protiúčet',
+            formData.protiucet,
+            (value) => updateField('protiucet', value)
+          )}
+
+          {counterCar && (
+            <View style={{ marginTop: 12, borderWidth: 1, borderColor: '#E5E5E7', borderRadius: 12, padding: 12 }}>
+              <Text style={{ fontSize: 16, fontWeight: '700', marginBottom: 6 }}>Vybraný protiúčet</Text>
+              <Text style={{ fontSize: 15 }}>{counterCar.make} {counterCar.model}</Text>
+              {!!counterCar.variant && <Text style={{ color: '#6B7280', marginTop: 2 }}>{counterCar.variant}</Text>}
+              {!!counterCar.price && <Text style={{ marginTop: 4 }}>{counterCar.price.toLocaleString('cs-CZ')} Kč</Text>}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                <TouchableOpacity onPress={() => setShowCounterPicker(true)} style={{ backgroundColor: '#e30613', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8 }}>
+                  <Text style={{ color: '#fff', fontWeight: '600' }}>Změnit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => { setCounterCar(null); updateField('protiucet', false); }} style={{ backgroundColor: '#F8F8F8', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E7' }}>
+                  <Text style={{ fontWeight: '600' }}>Odebrat</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -248,6 +282,12 @@ export default function AutomobilScreen() {
           <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
+
+      <CounterAccountPicker
+        visible={showCounterPicker}
+        onClose={() => setShowCounterPicker(false)}
+        onSelect={(car) => { setCounterCar(car); updateField('protiucet', true); }}
+      />
     </View>
   );
 }

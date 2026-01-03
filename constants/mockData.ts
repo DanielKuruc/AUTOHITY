@@ -112,7 +112,11 @@ export const mockPurchases: Purchase[] = [
       'https://images.unsplash.com/photo-1609521263047-f8f205293f24?w=800&q=80',
       'https://images.unsplash.com/photo-1494976388531-d1058494cdd8?w=800&q=80',
     ],
-    notes: 'Vozidlo ve výborném stavu. Potřeba menší servis brzd.',
+    defectImages: [
+      'https://images.unsplash.com/photo-1489824904134-891ab64532f1?w=800&q=80',
+      'https://images.unsplash.com/photo-1517649763962-0c623066013b?w=800&q=80',
+    ],
+    notes: 'Vozidlo ve výborném stavu. Potřeba menší servis brzd. Drobné škrábance na zadní levé dveři.',
     totalAmount: 485000,
     // Extended fields
     inspectionDate: '2024-01-14',
@@ -148,7 +152,10 @@ export const mockPurchases: Purchase[] = [
       'https://images.unsplash.com/photo-1606664515524-ed2f786a0bd6?w=800&q=80',
       'https://images.unsplash.com/photo-1603584173870-7f23fdae1b7a?w=800&q=80',
     ],
-    notes: 'Čeká na finální kontrolu a papírování. Klient je plátce DPH.',
+    defectImages: [
+      'https://images.unsplash.com/photo-1489824904134-891ab64532f1?w=800&q=80',
+    ],
+    notes: 'Čeká na finální kontrolu a papírování. Klient je plátce DPH. Mírné poškození vozu na levé straně.',
     totalAmount: 628000,
     inspectionDate: '2024-01-17',
     customerPrice: 680000,
@@ -228,7 +235,7 @@ export const mockPurchases: Purchase[] = [
       hasSecurityScrews: false,
       hasAiWheels: false,
     },
-    notes: 'Výkup zrušen kvůli problémům s financováním klienta.',
+    notes: 'Výkup zrušen kvůli problémům s financováním klienta.\nDůvod zrušení: Nedohoda o ceně',
     totalAmount: 218000,
     inspectionDate: '2024-01-11',
     customerPrice: 250000,
@@ -257,5 +264,6 @@ export const defaultPurchaseFilter = {
   timeFilter: TimeFilterType.ALL,
   purchaseStateFilter: [PurchaseState.NEW, PurchaseState.IN_PROGRESS, PurchaseState.COMPLETED],
   clientName: '',
-  spz: ''
+  spz: '',
+  employeeName: ''
 };

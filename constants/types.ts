@@ -5,30 +5,31 @@ export interface Purchase {
   clientName: string;
   clientType: ClientType;
   companyInfo?: CompanyInfo;
-  spz: string; // License plate (Slovak: "Státní poznávací značka")
-  purchaseDate: string;
+  spz: string; // License plate
+  purchaseDate: string | null;
   purchaseState: PurchaseState;
-  employeeId?: string;
+  employeeId?: string | null;
+  totalAmount?: number | null;
+  customerPrice?: number | null;
+  offeredPrice?: number | null;
+  expectedSalePrice?: number | null;
+  isVatPayer?: boolean;
+  phone?: string | null;
+  street?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  notes?: string | null;
+  inspectionDate?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  // Extended fields from form
   carDetails?: Car;
   images?: string[];
-  notes?: string;
-  totalAmount?: number;
-  // Extended fields from form
-  inspectionDate?: string;
-  customerPrice?: number;
-  offeredPrice?: number;
-  expectedSalePrice?: number;
-  isVatPayer?: boolean;
-  sourceKnowledge?: string;
-  isCounterAccount?: boolean;
-  vinVerified?: boolean;
-  // Client contact
-  phone?: string;
-  street?: string;
-  city?: string;
-  postalCode?: string;
-  // Component statuses
+  defectImages?: string[];
   componentStatuses?: ComponentStatus[];
+  sourceKnowledge?: string;
+  vinVerified?: boolean;
+  isCounterAccount?: boolean;
 }
 
 export interface ComponentStatus {
@@ -75,6 +76,7 @@ export interface PurchaseFilter {
   purchaseStateFilter: PurchaseState[];
   clientName?: string;
   spz?: string;
+  employeeName?: string;
 }
 
 export enum PurchaseState {

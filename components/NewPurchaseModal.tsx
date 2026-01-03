@@ -65,6 +65,8 @@ export function NewPurchaseModal({
   const [vinError, setVinError] = useState('');
   const [icoError, setIcoError] = useState('');
   const [showVinScanner, setShowVinScanner] = useState(false);
+  const [isAutoFetchingVin, setIsAutoFetchingVin] = useState(false);
+  const [isAutoFetchingIco, setIsAutoFetchingIco] = useState(false);
 
   const resetForm = () => {
     setVin('');
@@ -145,29 +147,78 @@ export function NewPurchaseModal({
       setIcoLoading(false);
     }
   };
+
+  // Auto-fetch VIN when complete (used by TextInput onChange)
+  const handleFetchVin_auto = async (vinValue: string) => {
+    const validation = validateVin(vinValue);
+    if (!validation.valid) return;
+
+    setIsAutoFetchingVin(true);
+    try {
+      console.log('[NewPurchaseModal] Auto-fetching VIN:', vinValue);
+      const data = await fetchVehicleDataByVin(vinValue);
+      setVehicleData(data);
+      console.log('[NewPurchaseModal] Auto-fetched vehicle data:', data);
+    } catch (error: any) {
+      console.log('[NewPurchaseModal] Auto-fetch VIN failed (non-critical):', error.message);
+      // Silently fail on auto-fetch
+    } finally {
+      setIsAutoFetchingVin(false);
+    }
+  };
+
+  // Auto-fetch IČO when complete (used by TextInput onChange)
+  const handleFetchIco_auto = async (icoValue: string) => {
+    const validation = validateIco(icoValue);
+    if (!validation.valid) return;
+
+    setIsAutoFetchingIco(true);
+    try {
+      console.log('[NewPurchaseModal] Auto-fetching IČO:', icoValue);
+      const data = await fetchCompanyByIco(icoValue);
+      setCompanyData(data);
+      if (data.nazev) {
+        setCompanyName(data.nazev);
+      }
+      console.log('[NewPurchaseModal] Auto-fetched company data:', data);
+    } catch (error: any) {
+      console.log('[NewPurchaseModal] Auto-fetch IČO failed (non-critical):', error.message);
+      // Silently fail on auto-fetch
+    } finally {
+      setIsAutoFetchingIco(false);
+    }
+  };
   const isFormValid = () => {
     if (vin.length !== 17) return false;
     if (isCompany) {
-      if (!companyName.trim()) return false;
+      // Either have company name OR have company data from ARES
+      const hasCompanyInfo = companyName.trim() || (companyData && companyData.nazev);
+      if (!hasCompanyInfo) return false;
       if (!ico.trim()) return false;
-      if (icoError) return false;
     } else {
       if (!firstName.trim()) return false;
       if (!lastName.trim()) return false;
     }
-    if (vinError) return false;
     return true;
   };
 
   const handleCreate = () => {
     if (!isFormValid()) return;
+    const finalCompanyName = companyName.trim() || (companyData?.nazev || '');
+
+    console.log('[NewPurchaseModal] ============ handleCreate START ============');
+    console.log('[NewPurchaseModal] vehicleData:', vehicleData);
+    console.log('[NewPurchaseModal] companyData:', companyData);
+    console.log('[NewPurchaseModal] vin:', vin);
+    console.log('[NewPurchaseModal] isCompany:', isCompany);
+    console.log('[NewPurchaseModal] ============ handleCreate END ============');
     onCreatePurchase({
       vin,
       vehicleData: vehicleData || undefined,
       firstName: isCompany ? '' : firstName,
       lastName: isCompany ? '' : lastName,
       isCompany,
-      companyName: isCompany ? companyName : undefined,
+      companyName: isCompany ? finalCompanyName : undefined,
       ico: isCompany ? ico : undefined,
       companyData: isCompany ? (companyData || undefined) : undefined,
     });
@@ -219,9 +270,14 @@ export function NewPurchaseModal({
                   style={[styles.vinInput, { backgroundColor: theme.inputBackground, color: theme.text, borderColor: theme.border }, vinError && styles.inputError]}
                   value={vin}
                   onChangeText={(text) => {
-                    setVin(text.toUpperCase());
+                    const upperText = text.toUpperCase();
+                    setVin(upperText);
                     setVinError('');
                     setVehicleData(null);
+                    // Auto-fetch if 17 chars
+                    if (upperText.length === 17 && hasApiKey()) {
+                      setTimeout(() => handleFetchVin_auto(upperText), 300);
+                    }
                   }}
                   placeholder="Zadejte 17-místný VIN"
                   placeholderTextColor={theme.textTertiary}
@@ -229,10 +285,15 @@ export function NewPurchaseModal({
                   maxLength={17}
                 />
                 <TouchableOpacity
-                  style={[styles.scanButton, { backgroundColor: theme.accent }]}
+                  style={[styles.scanButton, { backgroundColor: theme.accent }, (isAutoFetchingVin) && styles.vinButtonDisabled]}
                   onPress={() => setShowVinScanner(true)}
+                  disabled={isAutoFetchingVin}
                 >
-                  <Ionicons name="scan" size={20} color="#FFFFFF" />
+                  {isAutoFetchingVin ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Ionicons name="scan" size={20} color="#FFFFFF" />
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[
@@ -302,9 +363,14 @@ export function NewPurchaseModal({
                         style={[styles.vinInput, { backgroundColor: theme.inputBackground, color: theme.text, borderColor: theme.border }, icoError && styles.inputError]}
                         value={ico}
                         onChangeText={(text) => {
-                          setIco(text.replace(/\D/g, ''));
+                          const numericText = text.replace(/\D/g, '');
+                          setIco(numericText);
                           setIcoError('');
                           setCompanyData(null);
+                          // Auto-fetch if 8 chars
+                          if (numericText.length === 8) {
+                            setTimeout(() => handleFetchIco_auto(numericText), 300);
+                          }
                         }}
                         placeholder="Zadejte 8-místné IČO"
                         placeholderTextColor={theme.textTertiary}
@@ -381,12 +447,21 @@ export function NewPurchaseModal({
           {/* Buttons */}
           <View style={[styles.footer, { borderTopColor: theme.border }]}>
             <TouchableOpacity
-              style={[styles.createButton, { backgroundColor: '#34C759' }, !isFormValid() && styles.createButtonDisabled]}
+              style={[styles.createButton, { backgroundColor: '#34C759' }, (!isFormValid() || isAutoFetchingVin || isAutoFetchingIco) && styles.createButtonDisabled]}
               onPress={handleCreate}
-              disabled={!isFormValid()}
+              disabled={!isFormValid() || isAutoFetchingVin || isAutoFetchingIco}
             >
-              <Ionicons name="add-circle" size={20} color="#FFFFFF" />
-              <Text style={styles.createButtonText}>Založit výkup</Text>
+              {isAutoFetchingVin || isAutoFetchingIco ? (
+                <>
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <Text style={styles.createButtonText}>Načítám data...</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="add-circle" size={20} color="#FFFFFF" />
+                  <Text style={styles.createButtonText}>Založit výkup</Text>
+                </>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.emptyButton} onPress={handleCreateEmpty}>

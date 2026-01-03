@@ -22,17 +22,20 @@ export default function StatistikyScreen() {
   const stats = useMemo(() => {
     const now = new Date();
     const thisMonth = purchases.filter(p => {
+      if (!p.purchaseDate) return false;
       const date = new Date(p.purchaseDate);
       return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
     });
 
     const lastMonth = purchases.filter(p => {
+      if (!p.purchaseDate) return false;
       const date = new Date(p.purchaseDate);
       const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       return date.getMonth() === lastMonthDate.getMonth() && date.getFullYear() === lastMonthDate.getFullYear();
     });
 
     const thisWeek = purchases.filter(p => {
+      if (!p.purchaseDate) return false;
       const date = new Date(p.purchaseDate);
       const weekAgo = new Date(now);
       weekAgo.setDate(now.getDate() - 7);

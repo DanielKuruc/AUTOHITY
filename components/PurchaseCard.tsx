@@ -46,7 +46,9 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
     router.push(`/purchase/${purchase.id}`);
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string | null) => {
+    if (!dateString) return '';
+
     // Zkusíme parsovat český formát dd.mm.yyyy
     const czechMatch = dateString.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
     if (czechMatch) {
@@ -76,6 +78,19 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
   };
 
   const stateColor = getStateColor(purchase.purchaseState);
+
+  // Determine which date to display based on purchase state
+  const getDisplayDate = () => {
+    // COMPLETED - zobrazit datum výkupu
+    if (purchase.purchaseState === PurchaseState.COMPLETED) {
+      return purchase.purchaseDate;
+    }
+    // NEW, IN_PROGRESS, CANCELLED - zobrazit datum prohlídky
+    return purchase.inspectionDate || purchase.purchaseDate;
+  };
+
+  const displayDate = getDisplayDate();
+
   return (
     <TouchableOpacity 
       style={[styles.card, { backgroundColor: theme.card }]} 
@@ -107,11 +122,8 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
           <Text style={[styles.clientName, { color: theme.accent }]} numberOfLines={1}>
             {purchase.clientName}
           </Text>
-          <Text style={[styles.spz, { color: theme.textTertiary }]}>
-            {purchase.spz}
-          </Text>
           <Text style={[styles.date, { color: theme.textTertiary }]}>
-            {formatDate(purchase.purchaseDate)}
+            {formatDate(displayDate)}
           </Text>
           
           {/* Vehicle badges - Servisní kniha, První majitel, Původ ČR, DPH */}
@@ -150,11 +162,18 @@ export function PurchaseCard({ purchase }: PurchaseCardProps) {
               {getStateLabel(purchase.purchaseState)}
             </Text>
           </View>
-          {/* Zobrazit pouze Cenu výkupu (totalAmount), ne Cenu nabídnutou */}
-          {purchase.totalAmount && (!purchase.offeredPrice || purchase.totalAmount !== purchase.offeredPrice) && (
+          {purchase.purchaseState === PurchaseState.COMPLETED && purchase.totalAmount && (
             <Text style={[styles.amount, { color: theme.text }]}>
               {purchase.totalAmount.toLocaleString('cs-CZ')} Kč
             </Text>
+          )}
+          {purchase.purchaseState === PurchaseState.IN_PROGRESS && (
+            <TouchableOpacity
+              style={[styles.editButton, { backgroundColor: theme.accent }]}
+              onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
+            >
+              <Ionicons name="pencil" size={14} color="#FFFFFF" />
+            </TouchableOpacity>
           )}
         </View>
       </View>
@@ -204,11 +223,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 2,
   },
-  spz: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
   date: {
     fontSize: 12,
   },
@@ -244,5 +258,13 @@ const styles = StyleSheet.create({
   badgeText: {
     fontSize: 11,
     fontWeight: '500',
+  },
+  editButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
   },
 });
