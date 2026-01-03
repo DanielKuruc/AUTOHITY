@@ -1,10 +1,10 @@
 {
-  "name": "steercode-project",
-  "slug": "steercode-project",
+  "name": "Autohity výkup",
+  "slug": "autohity-vykup",
   "version": "1.0.0",
   "orientation": "portrait",
-  "icon": "./assets/images/icon.png",
-  "scheme": "myapp",
+  "icon": "./assets/images/autohity-logo.png",
+  "scheme": "autohity",
   "userInterfaceStyle": "automatic",
   "newArchEnabled": true,
   "ios": {
@@ -29,7 +29,7 @@
   "web": {
     "bundler": "metro",
     "output": "single",
-    "favicon": "./assets/images/favicon.png"
+    "favicon": "./assets/images/autohity-logo.png"
   },
   "plugins": [
     "expo-router",
