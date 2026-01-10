@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiService, setGlobalJwtToken as setApiServiceToken } from '@/services/apiService';
+import { registerForPushNotifications } from '@/services/notificationService';
 
 const SUPABASE_URL = 'https://zgvwyflaffrcvrolmior.supabase.co';
 const SUPABASE_LOGIN_FUNCTION = `${SUPABASE_URL}/functions/v1/login`;
@@ -132,8 +133,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(userData);
       setJwtToken(token);
       setApiServiceToken(token);
-      
       await saveAuthState(true, userData, token);
+
+      // Register for push notifications after successful login
+      await registerForPushNotifications();
 
       console.log('[Auth] Přihlášení úspěšné přes Supabase');
       console.log('[Auth] JWT token nastaven:', token.substring(0, 30) + '...');

@@ -7,18 +7,23 @@ import {
   Text,
   Alert,
   StatusBar,
+  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraCapture } from '@/components/CameraCapture';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { Purchase, PurchaseState, CarCondition, ClientType } from '@/constants/types';
+import { apiService } from '@/services/apiService';
+import * as ImagePicker from 'expo-image-picker';
 
 export default function FotoVadyScreen() {
   const { addPurchase } = usePurchases();
   const [vehicleImages, setVehicleImages] = useState<string[]>([]);
   const [defectImages, setDefectImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
+  const [cameraTarget, setCameraTarget] = useState<'vehicle' | 'defect'>('vehicle');
 
   const handleAddVehicleImage = (imageUri: string) => {
     setVehicleImages(prev => [...prev, imageUri]);
@@ -34,6 +39,30 @@ export default function FotoVadyScreen() {
 
   const handleRemoveDefectImage = (index: number) => {
     setDefectImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const openCamera = (target: 'vehicle' | 'defect') => {
+    setCameraTarget(target);
+    setShowCamera(true);
+  };
+
+  const onCapture = (uri: string) => {
+    if (cameraTarget === 'vehicle') handleAddVehicleImage(uri);
+    else handleAddDefectImage(uri);
+    setShowCamera(false);
+  };
+
+  const openGallery = async (target: 'vehicle' | 'defect', limit: number = 10) => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      selectionLimit: limit,
+      quality: 0.85,
+    });
+    if (!result.canceled) {
+      const uris = result.assets.map(a => a.uri);
+      if (target === 'vehicle') setVehicleImages(prev => [...prev, ...uris]);
+      else setDefectImages(prev => [...prev, ...uris]);
+    }
   };
 
   const handleComplete = async () => {
@@ -65,15 +94,38 @@ export default function FotoVadyScreen() {
         defectImages: defectImages.length > 0 ? defectImages : undefined
       };
 
-      addPurchase(newPurchase);
+      const createRes = await apiService.createPurchase(newPurchase);
+      const purchaseId = String(createRes?.id || createRes?.data?.id);
+      if (!purchaseId) throw new Error('Chybí ID nového výkupu z API');
+
+      if (vehicleImages.length > 0) {
+        try {
+          const res = await apiService.uploadPhotos(purchaseId, vehicleImages);
+          console.log('[NewPurchase] Vehicle upload OK:', res);
+        } catch (e) {
+          console.warn('[NewPurchase] Upload vehicle images failed:', e);
+        }
+      }
+
+      if (defectImages.length > 0) {
+        try {
+          const res = await apiService.uploadDefectPhotos(purchaseId, defectImages);
+          console.log('[NewPurchase] Defect upload OK:', res);
+        } catch (e) {
+          console.warn('[NewPurchase] Upload defect images failed:', e);
+        }
+      }
+
+      addPurchase({ ...newPurchase, id: purchaseId });
 
       Alert.alert(
         'Úspěch',
-        'Výkup byl úspěšně vytvořen',
+        'Výkup byl úspěšně vytvořen a fotky nahrány',
         [{ text: 'OK', onPress: () => router.back() }]
       );
     } catch (error) {
-      Alert.alert('Chyba', 'Nepodařilo se vytvořit výkup');
+      console.error('[FotoVady] Create or upload error:', error);
+      Alert.alert('Chyba', 'Nepodařilo se vytvořit výkup nebo nahrát fotky');
     } finally {
       setLoading(false);
     }
@@ -103,9 +155,28 @@ export default function FotoVadyScreen() {
           <Text style={styles.sectionDescription}>
             Zachyťte exteriér, interiér a všechny detaily vozidla
           </Text>
-          <View style={{ height: 100, backgroundColor: '#F2F2F7', borderRadius: 8, justifyContent: 'center', alignItems: 'center' }}>
-            <Text>Nahrávání fotek - dočasně skryto</Text>
+          <View style={styles.rowButtons}>
+            <TouchableOpacity style={styles.actionInline} onPress={() => openCamera('vehicle')}>
+              <Ionicons name="camera" size={20} color="#007AFF" />
+              <Text style={styles.actionInlineText}>Kamera</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionInline} onPress={() => openGallery('vehicle', 20)}>
+              <Ionicons name="images" size={20} color="#007AFF" />
+              <Text style={styles.actionInlineText}>Galerie</Text>
+            </TouchableOpacity>
           </View>
+          {vehicleImages.length > 0 && (
+            <View style={styles.thumbGrid}>
+              {vehicleImages.map((u, i) => (
+                <View key={`v-${i}`} style={styles.thumbItem}>
+                  <Image source={{ uri: u }} style={styles.thumbImg} />
+                  <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveVehicleImage(i)}>
+                    <Ionicons name="close" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* Section 2: Foto vady */}
@@ -114,9 +185,28 @@ export default function FotoVadyScreen() {
           <Text style={styles.sectionDescription}>
             Zdokumentujte škrábance, promáčknutí, rez nebo jiné problémy
           </Text>
-          <View style={{ height: 100, backgroundColor: '#F2F2F7', borderRadius: 8, justifyContent: 'center', alignItems: 'center' }}>
-            <Text>Nahrávání fotek - dočasně skryto</Text>
+          <View style={styles.rowButtons}>
+            <TouchableOpacity style={styles.actionInline} onPress={() => openCamera('defect')}>
+              <Ionicons name="camera" size={20} color="#FF3B30" />
+              <Text style={[styles.actionInlineText, { color: '#FF3B30' }]}>Kamera</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionInline} onPress={() => openGallery('defect', 20)}>
+              <Ionicons name="images" size={20} color="#FF3B30" />
+              <Text style={[styles.actionInlineText, { color: '#FF3B30' }]}>Galerie</Text>
+            </TouchableOpacity>
           </View>
+          {defectImages.length > 0 && (
+            <View style={styles.thumbGrid}>
+              {defectImages.map((u, i) => (
+                <View key={`d-${i}`} style={styles.thumbItem}>
+                  <Image source={{ uri: u }} style={styles.thumbImg} />
+                  <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveDefectImage(i)}>
+                    <Ionicons name="close" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -132,6 +222,10 @@ export default function FotoVadyScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {showCamera && (
+        <CameraCapture onCapture={onCapture} onClose={() => setShowCamera(false)} />
+      )}
     </View>
   );
 }
@@ -186,6 +280,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     lineHeight: 20,
   },
+  rowButtons: { flexDirection: 'row', gap: 16, alignItems: 'center', marginBottom: 12 },
+  actionInline: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  actionInlineText: { fontSize: 16, fontWeight: '600', color: '#007AFF' },
+  thumbGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  thumbItem: { width: '31%', aspectRatio: 1, borderRadius: 8, overflow: 'hidden', position: 'relative' },
+  thumbImg: { width: '100%', height: '100%' },
+  removeBtn: { position: 'absolute', top: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 12, padding: 4 },
   footer: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,

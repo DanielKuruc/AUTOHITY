@@ -3,6 +3,9 @@ import { StatusBar } from 'expo-status-bar';
 import { PurchaseProvider } from '@/contexts/PurchaseContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { ToastProvider } from '@/contexts/ToastContext';
+import { NotificationPreferencesProvider } from '@/contexts/NotificationPreferencesContext';
+import { NotificationCenterProvider } from '@/contexts/NotificationCenterContext';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StyleSheet, View, ActivityIndicator } from 'react-native';
 import LoginScreen from './login';
@@ -10,13 +13,15 @@ import { setGlobalJwtToken as setApiServiceToken } from '@/services/apiService';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { useEffect } from 'react';
+import * as Notifications from 'expo-notifications';
+import { router } from 'expo-router';
+import { ToastContainer } from '@/components/Toast';
 SplashScreen.preventAutoHideAsync();
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, jwtToken } = useAuth();
   const { theme } = useTheme();
 
-  // Set JWT token v services když se změní
   useEffect(() => {
     console.log('[RootLayout] AuthGate - jwtToken:', jwtToken ? 'set' : 'null');
     if (jwtToken) {
@@ -54,6 +59,31 @@ function RootLayoutContent() {
     }
   }, [loaded]);
 
+  // Setup notification listeners
+  useEffect(() => {
+    console.log('[RootLayout] Nastavuji notification listenery');
+
+    // Handle notification received while app is open
+    const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
+      console.log('[Notifications] Přijata notifikace:', notification.request.content.title);
+    });
+
+    // Handle notification response (user tapped on notification)
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      console.log('[Notifications] Uživatel klikl na notifikaci');
+      const data = response.notification.request.content.data;
+
+      if (data?.purchaseId) {
+        console.log('[Notifications] Naviguji na detail výkupu:', data.purchaseId);
+        router.push(`/purchase/${data.purchaseId}`);
+      }
+    });
+
+    return () => {
+      receivedSubscription.remove();
+      responseSubscription.remove();
+    };
+  }, []);
   if (!loaded) {
     return null;
   }
@@ -86,6 +116,7 @@ function RootLayoutContent() {
           />
         </Stack>
       </AuthGate>
+      <ToastContainer />
     </>
   );
 }
@@ -95,9 +126,15 @@ export default function RootLayout() {
     <GestureHandlerRootView style={styles.container}>
       <ThemeProvider>
         <AuthProvider>
-          <PurchaseProvider>
-            <RootLayoutContent />
-          </PurchaseProvider>
+          <ToastProvider>
+            <NotificationCenterProvider>
+              <NotificationPreferencesProvider>
+                <PurchaseProvider>
+                  <RootLayoutContent />
+                </PurchaseProvider>
+              </NotificationPreferencesProvider>
+            </NotificationCenterProvider>
+          </ToastProvider>
         </AuthProvider>
       </ThemeProvider>
     </GestureHandlerRootView>

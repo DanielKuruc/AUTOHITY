@@ -17,66 +17,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useNotificationPreferences } from '@/contexts/NotificationPreferencesContext';
+import { useToast } from '@/contexts/ToastContext';
 import { PurchaseState } from '@/constants/types';
 import { mockEmployees } from '@/constants/mockData';
 import { 
-  registerForPushNotifications,
   sendPurchaseStatusNotification,
 } from '@/services/notificationService';
-
-interface NotificationSettings {
-  statusChanges: boolean;
-  reminders: boolean;
-  reports: boolean;
-  reminderTime: string;
-}
-
-const NOTIFICATION_SETTINGS_KEY = 'notification_settings';
 
 export default function ProfileScreen() {
   const { theme, isDark, themeMode, setThemeMode } = useTheme();
   const { purchases } = usePurchases();
-  const { user, logout, changePassword } = useAuth();
+  const { user, logout } = useAuth();
+  const { preferences, updatePreferences, isLoading } = useNotificationPreferences();
+  const { showToast } = useToast();
   const currentEmployee = mockEmployees.find(emp => emp.id === '1');
   const myPurchases = purchases.filter(p => p.employeeId === '1');
 
   const [showNotificationModal, setShowNotificationModal] = useState(false);
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
-    statusChanges: true,
-    reminders: true,
-    reports: true,
-    reminderTime: '09:00',
-  });
 
-  useEffect(() => {
-    loadNotificationSettings();
-  }, []);
-
-  const loadNotificationSettings = async () => {
-    try {
-      const saved = await AsyncStorage.getItem(NOTIFICATION_SETTINGS_KEY);
-      if (saved) {
-        setNotificationSettings(JSON.parse(saved));
-      }
-    } catch (error) {
-      console.error('[Profile] Chyba při načítání nastavení notifikací:', error);
-    }
-  };
-
-  const saveNotificationSettings = async (settings: NotificationSettings) => {
-    try {
-      await AsyncStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(settings));
-      setNotificationSettings(settings);
-      Alert.alert('Úspěch', 'Nastavení notifikací bylo uloženo');
-    } catch (error) {
-      console.error('[Profile] Chyba při ukládání nastavení notifikací:', error);
-      Alert.alert('Chyba', 'Nepodařilo se uložit nastavení');
-    }
-  };
-
-  const updateSetting = (key: keyof NotificationSettings, value: boolean | string) => {
-    const updated = { ...notificationSettings, [key]: value };
-    setNotificationSettings(updated);
+  const updateSetting = (key: keyof typeof preferences, value: boolean | string) => {
+    updatePreferences({ ...preferences, [key]: value });
   };
 
   const getStatsForState = (state: PurchaseState) => {
@@ -110,8 +71,13 @@ export default function ProfileScreen() {
   };
 
   const handleSaveNotificationSettings = async () => {
-    await saveNotificationSettings(notificationSettings);
-    setShowNotificationModal(false);
+    try {
+      await updatePreferences(preferences);
+      showToast('Nastavení notifikací uloženo ✅', 'success');
+      setShowNotificationModal(false);
+    } catch (error) {
+      showToast('Chyba při ukládání nastavení', 'error');
+    }
   };
 
   const handleTestNotification = async () => {
@@ -121,7 +87,7 @@ export default function ProfileScreen() {
       PurchaseState.COMPLETED,
       'test-id'
     );
-    Alert.alert('Test', 'Testovací notifikace byla odeslána');
+    showToast('Testovací notifikace byla odeslána ✅', 'success');
   };
 
   const getThemeModeLabel = () => {
@@ -284,70 +250,123 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.notificationItems}>
+              {/* STK Reminders */}
+              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Připomínky STK
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Upozornění na blížící se STK
+                  </Text>
+                </View>
+                <Switch
+                  value={preferences.stkReminders}
+                  onValueChange={(value) => updatePreferences({ stkReminders: value })}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={preferences.stkReminders ? theme.accent : theme.textTertiary}
+                />
+              </View>
+
+              {/* Incomplete Purchases */}
+              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Nedokončené výkupy
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Denní připomínky na výkupy k dokončení
+                  </Text>
+                </View>
+                <Switch
+                  value={preferences.incompletePurchases}
+                  onValueChange={(value) => updatePreferences({ incompletePurchases: value })}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={preferences.incompletePurchases ? theme.accent : theme.textTertiary}
+                />
+              </View>
+
+              {/* Delivery Time */}
+              {preferences.incompletePurchases && (
+                <View style={[styles.notificationTimeItem, { backgroundColor: theme.inputBackground }]}>
+                  <Ionicons name="time" size={20} color={theme.accent} />
+                  <Text style={[styles.notificationTimeLabel, { color: theme.text }]}>
+                    Čas doručení
+                  </Text>
+                  <Text style={[styles.notificationTimeValue, { color: theme.accent }]}>
+                    {preferences.deliveryTime}
+                  </Text>
+                </View>
+              )}
               {/* Status Changes */}
               <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
                 <View style={styles.notificationInfo}>
                   <Text style={[styles.notificationTitle, { color: theme.text }]}>
-                    Změny stavu výkupů
+                    Změny stavu
                   </Text>
                   <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
-                    Dostaňte upozornění na změny stavu výkupů
+                    Upozornění na změny stavu výkupů
                   </Text>
                 </View>
                 <Switch
-                  value={notificationSettings.statusChanges}
-                  onValueChange={(value) => updateSetting('statusChanges', value)}
+                  value={preferences.statusChanges}
+                  onValueChange={(value) => updatePreferences({ statusChanges: value })}
                   trackColor={{ false: theme.border, true: theme.accent + '40' }}
-                  thumbColor={notificationSettings.statusChanges ? theme.accent : theme.textTertiary}
+                  thumbColor={preferences.statusChanges ? theme.accent : theme.textTertiary}
                 />
               </View>
-
-              {/* Reminders */}
-              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
-                <View style={styles.notificationInfo}>
-                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
-                    Připomínky
-                  </Text>
-                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
-                    Denní připomínky na nedokončené výkupy
-                  </Text>
-                </View>
-                <Switch
-                  value={notificationSettings.reminders}
-                  onValueChange={(value) => updateSetting('reminders', value)}
-                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
-                  thumbColor={notificationSettings.reminders ? theme.accent : theme.textTertiary}
-                />
-              </View>
-
-              {/* Reminder Time */}
-              {notificationSettings.reminders && (
-                <View style={[styles.notificationTimeItem, { backgroundColor: theme.inputBackground }]}>
-                  <Ionicons name="time" size={20} color={theme.accent} />
-                  <Text style={[styles.notificationTimeLabel, { color: theme.text }]}>
-                    Čas připomínky
-                  </Text>
-                  <Text style={[styles.notificationTimeValue, { color: theme.accent }]}>
-                    {notificationSettings.reminderTime}
-                  </Text>
-                </View>
-              )}
 
               {/* Reports */}
               <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
                 <View style={styles.notificationInfo}>
                   <Text style={[styles.notificationTitle, { color: theme.text }]}>
-                    Reporty
+                    Týdenní & Měsíční reporty
                   </Text>
                   <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
-                    Týdenní a měsíční reporty
+                    Statistika a přehledy výkupů
                   </Text>
                 </View>
                 <Switch
-                  value={notificationSettings.reports}
-                  onValueChange={(value) => updateSetting('reports', value)}
+                  value={preferences.reportNotifications}
+                  onValueChange={(value) => updatePreferences({ reportNotifications: value })}
                   trackColor={{ false: theme.border, true: theme.accent + '40' }}
-                  thumbColor={notificationSettings.reports ? theme.accent : theme.textTertiary}
+                  thumbColor={preferences.reportNotifications ? theme.accent : theme.textTertiary}
+                />
+              </View>
+
+              {/* Sound */}
+              <View style={[styles.notificationItem, { borderBottomColor: theme.border }]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Zvuk
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Zvuková signalizace notifikací
+                  </Text>
+                </View>
+                <Switch
+                  value={preferences.soundEnabled}
+                  onValueChange={(value) => updatePreferences({ soundEnabled: value })}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={preferences.soundEnabled ? theme.accent : theme.textTertiary}
+                />
+              </View>
+
+              {/* Vibration */}
+              <View style={[styles.notificationItem]}>
+                <View style={styles.notificationInfo}>
+                  <Text style={[styles.notificationTitle, { color: theme.text }]}>
+                    Vibrace
+                  </Text>
+                  <Text style={[styles.notificationDescription, { color: theme.textSecondary }]}>
+                    Vibrační zpětná vazba
+                  </Text>
+                </View>
+                <Switch
+                  value={preferences.vibrationEnabled}
+                  onValueChange={(value) => updatePreferences({ vibrationEnabled: value })}
+                  trackColor={{ false: theme.border, true: theme.accent + '40' }}
+                  thumbColor={preferences.vibrationEnabled ? theme.accent : theme.textTertiary}
                 />
               </View>
             </View>

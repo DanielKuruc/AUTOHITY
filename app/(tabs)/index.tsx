@@ -7,6 +7,7 @@ import {
   Text, 
   RefreshControl,
   TextInput,
+  Image as RNImage,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,11 +16,14 @@ import { PurchaseCard } from '@/components/PurchaseCard';
 import { NewPurchaseModal, PurchaseInitData } from '@/components/NewPurchaseModal';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useToast } from '@/contexts/ToastContext';
 import { Purchase } from '@/constants/types';
 import { mockEmployees } from '@/constants/mockData';
+import { apiService } from '@/services/apiService';
 
 export default function PurchasesScreen() {
   const { theme } = useTheme();
+  const { showToast } = useToast();
   const [showNewPurchaseModal, setShowNewPurchaseModal] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,7 +60,6 @@ export default function PurchasesScreen() {
   const handleCreatePurchase = (data: PurchaseInitData) => {
     setInitData(data);
     setShowNewPurchaseModal(false);
-    
     // Navigate immediately
     router.push('/new-purchase');
   };
@@ -64,6 +67,50 @@ export default function PurchasesScreen() {
   const handleCreateEmpty = () => {
     setShowNewPurchaseModal(false);
     router.push('/new-purchase');
+  };
+
+  const handleTestApi = async () => {
+    try {
+      const now = new Date();
+      const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+      const isoDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+      // 1) Create purchase
+      const createRes = await apiService.createPurchase({
+        clientName: 'Test API',
+        clientType: 'person',
+        spz: `TEST${Date.now().toString().slice(-4)}`,
+        purchaseDate: isoDate,
+        purchaseState: 'NEW',
+        notes: 'Created via Test API button',
+      });
+      const id = String(createRes.id || createRes.data?.id || createRes?.purchaseId || '');
+      if (!id) throw new Error('Failed to obtain purchase ID');
+
+      // 2) Upload one normal photo and one defect photo using bundled assets
+      const carAsset = RNImage.resolveAssetSource(require('@/assets/test-car-2.jpg'));
+      const defectAsset = RNImage.resolveAssetSource(require('@/assets/test-damage-1.jpg'));
+      await apiService.uploadPhotos(id, [carAsset.uri]);
+      const defectUpload = await apiService.uploadDefectPhotos(id, [defectAsset.uri]);
+
+      // 3) Update notes
+      await apiService.updatePurchase(id, { notes: 'Test API update OK' });
+
+      // 4) Optionally delete uploaded defect photo (keep gallery tidy)
+      const uploaded = (defectUpload as any)?.files?.[0] as string | undefined;
+      if (uploaded) {
+        const filename = uploaded.split('/').pop() as string;
+        if (filename) {
+          await apiService.deletePhoto(id, filename);
+        }
+      }
+
+      showToast('Test API úspěšný ✅', 'success');
+      // Refresh list to reflect the new record
+      refreshPurchases();
+    } catch (e: any) {
+      showToast(e?.message || 'Chyba testu API', 'error');
+    }
   };
 
   const renderPurchase = ({ item }: { item: Purchase }) => (
@@ -155,6 +202,13 @@ export default function PurchasesScreen() {
                   <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
                 </View>
               )}
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.iconButton, { backgroundColor: theme.inputBackground }]}
+              onPress={handleTestApi}
+              accessibilityLabel="Test API"
+            >
+              <Ionicons name="flask" size={20} color={theme.text} />
             </TouchableOpacity>
             <TouchableOpacity 
               style={[styles.addButton, { backgroundColor: theme.accent }]} 

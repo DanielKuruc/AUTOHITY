@@ -2,8 +2,11 @@ import { Purchase } from '@/constants/types';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
 
-const API_BASE_URL = 'https://autohity.cz/php-api';
+const PHP_BASE = process.env.EXPO_PUBLIC_PHP_API_BASE || 'https://autohity.cz';
+const API_BASE_URL = `${PHP_BASE}/php-api`;
 const AUTH_API_URL = process.env.EXPO_PUBLIC_AUTH_API_URL || 'https://auth-server.example.com'; // Separate auth server - set via env
 
 const ABSOLUTE_BASE_URL = 'https://autohity.cz';
@@ -51,6 +54,19 @@ const camelToSnake = (str: string): string => {
   return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 };
 
+// Normalize booleans coming from API ("0"/"1", 0/1, "true"/"false", true/false)
+const normalizeBool = (v: any): boolean | undefined => {
+  if (v === null || v === undefined || v === '') return undefined;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v === 1;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (s === '1' || s === 'true' || s === 'yes' || s === 'ano') return true;
+    if (s === '0' || s === 'false' || s === 'no' || s === 'ne') return false;
+  }
+  return undefined;
+};
+
 const transformApiToCamelCase = (obj: any): any => {
   if (Array.isArray(obj)) {
     return obj.map(transformApiToCamelCase);
@@ -59,38 +75,28 @@ const transformApiToCamelCase = (obj: any): any => {
     const transformed: any = {};
     for (const [key, value] of Object.entries(obj)) {
       const camelKey = snakeToCamel(key);
-      // Special handling for JSON stringified arrays like photos
-      if ((camelKey === 'images' || camelKey === 'defectImages' || camelKey === 'photos') && typeof value === 'string') {
+      // Photos -> images
+      if ((camelKey === 'images' || camelKey === 'defectImages' || key === 'photos' || key === 'defect_photos') && typeof value === 'string') {
         try {
-          const parsed = JSON.parse(value);
-          // Map server 'photos' -> client 'images'
-          if (camelKey === 'photos') {
-            transformed['images'] = parsed;
-          } else {
-            transformed[camelKey] = parsed;
-          }
-        } catch (e) {
-          if (camelKey === 'photos') {
-            transformed['images'] = value as any;
-          } else {
-            transformed[camelKey] = value;
-          }
+          const parsed = JSON.parse(value as string);
+          if (key === 'photos' || camelKey === 'images') transformed['images'] = parsed;
+          else transformed['defectImages'] = parsed;
+        } catch {
+          if (key === 'photos' || camelKey === 'images') transformed['images'] = value as any;
+          else transformed['defectImages'] = value as any;
         }
-      } else if (camelKey === 'photos' && Array.isArray(value)) {
-        // If API already returns array JSON, alias to images
+      } else if (key === 'photos' && Array.isArray(value)) {
         transformed['images'] = value;
-      } else if (camelKey === 'defect_photos') {
-        if (typeof value === 'string') {
-          try { transformed['defectImages'] = JSON.parse(value); }
-          catch { transformed['defectImages'] = value as any; }
-        } else {
-          transformed['defectImages'] = transformApiToCamelCase(value);
-        }
-      } else if (camelKey === 'car_details') {
+      } else if (key === 'defect_photos' && Array.isArray(value)) {
+        transformed['defectImages'] = value;
+      } else if (camelKey.startsWith('is') || camelKey.startsWith('has')) {
+        const b = normalizeBool(value);
+        transformed[camelKey] = b === undefined ? value : b;
+      } else if (camelKey === 'carDetails' || key === 'car_details') {
         transformed['carDetails'] = transformApiToCamelCase(value);
-      } else if (camelKey === 'component_statuses') {
+      } else if (camelKey === 'componentStatuses' || key === 'component_statuses') {
         transformed['componentStatuses'] = transformApiToCamelCase(value);
-      } else if (camelKey === 'company_info') {
+      } else if (camelKey === 'companyInfo' || key === 'company_info') {
         if (typeof value === 'string') {
           try { transformed['companyInfo'] = JSON.parse(value as string); }
           catch { transformed['companyInfo'] = value; }
@@ -124,11 +130,11 @@ const transformApiToCamelCase = (obj: any): any => {
           driveType: transformed.vehicleDriveType,
           stk: transformed.vehicleStk,
           firstRegistration: transformed.vehicleFirstRegistration,
-          isImport: !!transformed.vehicleIsImport,
-          isFirstOwner: !!transformed.vehicleIsFirstOwner,
-          hasServiceBook: !!transformed.vehicleHasServiceBook,
-          hasSecurityScrews: !!transformed.vehicleHasSecurityScrews,
-          hasAiWheels: !!transformed.vehicleHasAiWheels,
+          isImport: normalizeBool(transformed.vehicleIsImport),
+          isFirstOwner: normalizeBool(transformed.vehicleIsFirstOwner),
+          hasServiceBook: normalizeBool(transformed.vehicleHasServiceBook),
+          hasSecurityScrews: normalizeBool(transformed.vehicleHasSecurityScrews),
+          hasAiWheels: normalizeBool(transformed.vehicleHasAiWheels),
           condition: 'USED',
         } as any;
       }
@@ -195,8 +201,13 @@ class ApiService {
     if (clone.purchaseDate !== undefined) clone.purchaseDate = normalizeCzDate(clone.purchaseDate);
     if (clone.inspectionDate !== undefined) clone.inspectionDate = normalizeCzDate(clone.inspectionDate);
     if (clone.carDetails) {
-      const cd = { ...clone.carDetails };
+      const cd: any = { ...clone.carDetails };
+      // Alias doProvozu -> firstRegistration if needed
+      if (!cd.firstRegistration && cd.doProvozu) {
+        cd.firstRegistration = cd.doProvozu;
+      }
       cd.firstRegistration = normalizeCzDate(cd.firstRegistration);
+      delete cd.doProvozu;
       clone.carDetails = cd;
     }
 
@@ -227,7 +238,11 @@ class ApiService {
       const apiData: any = this.sanitizeForApi(purchase);
       // Map client images -> server photos (JSON)
       if (purchase.images && purchase.images.length > 0) {
-        apiData.photos = purchase.images;
+        apiData.photos = JSON.stringify(purchase.images);
+      }
+      // Map defectImages -> defect_photos
+      if (purchase.defectImages && purchase.defectImages.length > 0) {
+        apiData.defect_photos = JSON.stringify(purchase.defectImages);
       }
       console.log('[ApiService] Purchase data (camelCase):', JSON.stringify(apiData, null, 2));
 
@@ -288,6 +303,15 @@ class ApiService {
             };
           }
         }
+        // Normalize booleans within carDetails if present as strings/numbers
+        if (p.carDetails) {
+          const c = p.carDetails as any;
+          c.isImport = normalizeBool(c.isImport);
+          c.isFirstOwner = normalizeBool(c.isFirstOwner);
+          c.hasServiceBook = normalizeBool(c.hasServiceBook);
+          c.hasSecurityScrews = normalizeBool(c.hasSecurityScrews);
+          c.hasAiWheels = normalizeBool(c.hasAiWheels);
+        }
       });
       // Absolutizuj URL fotek
       transformed.forEach((p: any) => {
@@ -336,6 +360,15 @@ class ApiService {
           };
         }
       }
+      // Normalize booleans in carDetails
+      if ((transformed as any).carDetails) {
+        const c = (transformed as any).carDetails as any;
+        c.isImport = normalizeBool(c.isImport);
+        c.isFirstOwner = normalizeBool(c.isFirstOwner);
+        c.hasServiceBook = normalizeBool(c.hasServiceBook);
+        c.hasSecurityScrews = normalizeBool(c.hasSecurityScrews);
+        c.hasAiWheels = normalizeBool(c.hasAiWheels);
+      }
       if (Array.isArray((transformed as any).images)) (transformed as any).images = (transformed as any).images.map((x: string) => absolutizeUrl(x));
       if (Array.isArray((transformed as any).defectImages)) (transformed as any).defectImages = (transformed as any).defectImages.map((x: string) => absolutizeUrl(x));
       console.log('[ApiService] Výkup načten:', transformed);
@@ -357,7 +390,10 @@ class ApiService {
       // PHP API očekává camelCase klíče – posíláme sanitizovaná data
       const apiData: any = this.sanitizeForApi(purchase as any);
       if (purchase.images && purchase.images.length > 0) {
-        apiData.photos = purchase.images;
+        apiData.photos = JSON.stringify(purchase.images);
+      }
+      if (purchase.defectImages && purchase.defectImages.length > 0) {
+        apiData.defect_photos = JSON.stringify(purchase.defectImages);
       }
 
       const response = await fetch(`${API_BASE_URL}/purchases/${id}`, {
@@ -573,62 +609,85 @@ class ApiService {
    */
   async uploadPhotos(purchaseId: string, photoUris: string[]): Promise<{ success: boolean; files: string[] }> {
     try {
-      console.log(`[ApiService] Uploaduji ${photoUris.length} fotek pro nákup ID: ${purchaseId}`);
+      if (!photoUris || photoUris.length === 0) {
+        console.log('[ApiService] uploadPhotos: no photoUris provided, skipping');
+        return { success: true, files: [] };
+      }
+      const pid = String(purchaseId).trim();
+      console.log(`[ApiService] Uploaduji ${photoUris.length} fotek pro nákup ID: ${pid}`);
 
-      // Compress photos before upload
-      const compressedUris: string[] = [];
-      for (const uri of photoUris) {
+      // Compress + ensure local files before upload
+      const preparedFiles: { uri: string; name: string; type: string }[] = [];
+      let index = 0;
+      for (const originalUri of photoUris) {
+        const filename = `photo_${pid}_${Date.now()}_${index++}.jpg`;
+        let workUri = originalUri;
+
+        // If remote URL, download to cache first
+        if (workUri.startsWith('http://') || workUri.startsWith('https://')) {
+          const downloadPath = `${FileSystem.cacheDirectory}${filename}`;
+          try {
+            const dl = await FileSystem.downloadAsync(workUri, downloadPath);
+            workUri = dl.uri;
+          } catch (e) {
+            console.warn('[ApiService] Remote image download failed, skipping:', workUri, e);
+            continue; // skip this file
+          }
+        }
+
+        // Compress to 1600px width (native only); on web keep as is
+        let localUri = workUri;
         try {
-          const manipulated = await ImageManipulator.manipulateAsync(
-            uri,
-            [{ resize: { width: 1600 } }],
-            { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
-          );
-          compressedUris.push(manipulated.uri || uri);
+          if (Platform.OS !== 'web') {
+            const manipulated = await ImageManipulator.manipulateAsync(
+              workUri,
+              [{ resize: { width: 1600 } }],
+              { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
+            );
+            localUri = manipulated.uri || workUri;
+          }
         } catch (e) {
           console.warn('[ApiService] Compression failed, using original:', e);
-          compressedUris.push(uri);
         }
+
+        preparedFiles.push({ uri: localUri, name: filename, type: 'image/jpeg' });
       }
       const formData = new FormData();
-      for (let i = 0; i < compressedUris.length; i++) {
-        const uri = compressedUris[i];
-        const filename = `photo_${purchaseId}_${Date.now()}_${i}.jpg`;
-        // Převeď URI na blob pro web/React Native
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        formData.append('photos[]', {
-          uri,
-          type: 'image/jpeg',
-          name: filename,
-        } as any);
-      }
-
-      // Prepare headers bez Content-Type a bez Authorization
-      const headers: Record<string, string> = {};
-
-      const uploadResponse = await fetch(
-        `${API_BASE_URL}/purchases/${purchaseId}/upload-images`,
-        {
-          method: 'POST',
-          headers,
-          body: formData,
+      if (Platform.OS === 'web') {
+        // Web: fetch blob and append as File for each
+        for (const f of preparedFiles) {
+          try {
+            const resp = await fetch(f.uri);
+            const blob = await resp.blob();
+            const file = new File([blob], f.name, { type: f.type });
+            formData.append('photos[]', file);
+          } catch (e) {
+            console.warn('[ApiService] Web blob append failed:', e);
+          }
         }
-      );
-
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        console.error(`[ApiService] Upload error: ${uploadResponse.status} - ${errorText}`);
-        throw new Error(`Upload fotek selhal: ${uploadResponse.status}`);
+      } else {
+        // Native: append RN file parts
+        for (const f of preparedFiles) {
+          formData.append('photos[]', { uri: f.uri, name: f.name, type: f.type } as any);
+        }
       }
 
-      const result = await uploadResponse.json();
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-images`;
+      console.log('[ApiService] Upload URL:', url);
+      const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
+
+      const text = await uploadResponse.text();
+      console.log('[ApiService] Upload response status/text:', uploadResponse.status, text);
+      if (!uploadResponse.ok) {
+        throw new Error(`Upload fotek selhal: ${uploadResponse.status} - ${text}`);
+      }
+
+      let result: any = {};
+      try { result = JSON.parse(text); } catch { result = { files: [] }; }
       console.log('[ApiService] Fotky uploadovány:', result);
 
-      return {
-        success: true,
-        files: result.files || [],
-      };
+      return { success: true, files: result.files || [] };
     } catch (error: any) {
       console.error('[ApiService] Upload photos error:', error);
       throw error;
@@ -637,41 +696,65 @@ class ApiService {
 
   async uploadDefectPhotos(purchaseId: string, photoUris: string[]): Promise<{ success: boolean; files: string[] }> {
     try {
-      console.log(`[ApiService] Uploaduji ${photoUris.length} fotek vad pro nákup ID: ${purchaseId}`);
-      const compressedUris: string[] = [];
-      for (const uri of photoUris) {
-        try {
-          const manipulated = await ImageManipulator.manipulateAsync(
-            uri,
-            [{ resize: { width: 1600 } }],
-            { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
-          );
-          compressedUris.push(manipulated.uri || uri);
-        } catch (e) {
-          console.warn('[ApiService] Defect compression failed, using original:', e);
-          compressedUris.push(uri);
+      if (!photoUris || photoUris.length === 0) {
+        console.log('[ApiService] uploadDefectPhotos: no photoUris provided, skipping');
+        return { success: true, files: [] };
+      }
+      const pid = String(purchaseId).trim();
+      console.log(`[ApiService] Uploaduji ${photoUris.length} fotek vad pro nákup ID: ${pid}`);
+
+      const preparedFiles: { uri: string; name: string; type: string }[] = [];
+      let index = 0;
+      for (const originalUri of photoUris) {
+        const filename = `defect_${pid}_${Date.now()}_${index++}.jpg`;
+        let workUri = originalUri;
+        if (workUri.startsWith('http://') || workUri.startsWith('https://')) {
+          const downloadPath = `${FileSystem.cacheDirectory}${filename}`;
+          try {
+            const dl = await FileSystem.downloadAsync(workUri, downloadPath);
+            workUri = dl.uri;
+          } catch (e) {
+            console.warn('[ApiService] Remote defect image download failed, skipping:', workUri, e);
+            continue;
+          }
         }
+        let localUri = workUri;
+        try {
+          if (Platform.OS !== 'web') {
+            const manipulated = await ImageManipulator.manipulateAsync(
+              workUri,
+              [{ resize: { width: 1600 } }],
+              { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
+            );
+            localUri = manipulated.uri || workUri;
+          }
+        } catch {}
+        preparedFiles.push({ uri: localUri, name: filename, type: 'image/jpeg' });
       }
       const formData = new FormData();
-      for (let i = 0; i < compressedUris.length; i++) {
-        const uri = compressedUris[i];
-        const filename = `defect_${purchaseId}_${Date.now()}_${i}.jpg`;
-        // Web needs Blob
-        try {
-          const resp = await fetch(uri);
-          const blob = await resp.blob();
-          formData.append('photos[]', blob as any, filename);
-        } catch {
-          formData.append('photos[]', { uri, type: 'image/jpeg', name: filename } as any);
+      if (Platform.OS === 'web') {
+        for (const f of preparedFiles) {
+          try {
+            const resp = await fetch(f.uri);
+            const blob = await resp.blob();
+            const file = new File([blob], f.name, { type: f.type });
+            formData.append('defect_photos[]', file);
+          } catch (e) {
+            console.warn('[ApiService] Web defect blob append failed:', e);
+          }
+        }
+      } else {
+        for (const f of preparedFiles) {
+          formData.append('defect_photos[]', { uri: f.uri, name: f.name, type: f.type } as any);
         }
       }
-      const headers: Record<string, string> = {};
-      const url = `${API_BASE_URL}/purchases/${purchaseId}/upload-defect-images`;
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-defect-images`;
       console.log('[ApiService] Defect upload URL:', url);
       const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
       const text = await uploadResponse.text();
+      console.log('[ApiService] Defect upload response status/text:', uploadResponse.status, text);
       if (!uploadResponse.ok) {
-        console.error('[ApiService] Defect upload error payload:', text);
         throw new Error(`Upload fotek vad selhal: ${uploadResponse.status} - ${text}`);
       }
       let result: any = {};
@@ -710,4 +793,97 @@ class ApiService {
   }
 }
 
-export const apiService = new ApiService();
+export const apiService = {
+  // Purchases
+  async createPurchase(payload: any) {
+    const res = await fetch(`${API_BASE_URL}/purchases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text);
+    try { return JSON.parse(text); } catch { return { id: null, raw: text }; }
+  },
+  async getPurchases() {
+    return new ApiService().getPurchases();
+  },
+  async getPurchaseById(id: string) {
+    return new ApiService().getPurchaseById(id);
+  },
+  async updatePurchase(id: string, data: any) {
+    return new ApiService().updatePurchase(id, data);
+  },
+  async deletePurchase(id: string) {
+    return new ApiService().deletePurchase(id);
+  },
+  async searchPurchases(filters: Record<string, any>) {
+    return new ApiService().searchPurchases(filters);
+  },
+
+  // Clients
+  async listClients(params: Record<string, string | number> = {}) {
+    const qs = new URLSearchParams(params as any).toString();
+    const res = await fetch(`${API_BASE_URL}/clients${qs ? `?${qs}` : ''}`);
+    return res.json();
+  },
+  async getClient(id: number | string) {
+    const res = await fetch(`${API_BASE_URL}/clients/${id}`);
+    return res.json();
+  },
+  async createClient(data: any) {
+    const res = await fetch(`${API_BASE_URL}/clients`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+  async updateClient(id: number | string, data: any) {
+    const res = await fetch(`${API_BASE_URL}/clients/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+  async deleteClient(id: number | string) {
+    const res = await fetch(`${API_BASE_URL}/clients/${id}`, { method: 'DELETE' });
+    return res.json();
+  },
+
+  // Vehicle under purchase
+  async getVehicle(purchaseId: string | number) {
+    const res = await fetch(`${API_BASE_URL}/purchases/${purchaseId}/vehicle`);
+    return res.json();
+  },
+  async upsertVehicle(purchaseId: string | number, data: any) {
+    const res = await fetch(`${API_BASE_URL}/purchases/${purchaseId}/vehicle`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+  async deleteVehicle(purchaseId: string | number) {
+    const res = await fetch(`${API_BASE_URL}/purchases/${purchaseId}/vehicle`, { method: 'DELETE' });
+    return res.json();
+  },
+
+  // Component statuses
+  async getComponents(purchaseId: string | number) {
+    const res = await fetch(`${API_BASE_URL}/purchases/${purchaseId}/components`);
+    return res.json();
+  },
+  async putComponents(purchaseId: string | number, items: any[]) {
+    const res = await fetch(`${API_BASE_URL}/purchases/${purchaseId}/components`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(items),
+    });
+    return res.json();
+  },
+
+  // Uploads
+  async uploadPhotos(purchaseId: string, photoUris: string[]) {
+    return new ApiService().uploadPhotos(purchaseId, photoUris);
+  },
+  async uploadDefectPhotos(purchaseId: string, photoUris: string[]) {
+    return new ApiService().uploadDefectPhotos(purchaseId, photoUris);
+  },
+  async deletePhoto(purchaseId: string, filename: string) {
+    return new ApiService().deletePhoto(purchaseId, filename);
+  },
+};

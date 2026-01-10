@@ -37,28 +37,39 @@ export async function registerForPushNotifications(): Promise<string | null> {
   if (Device.isDevice) {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
-    
     if (existingStatus !== 'granted') {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
-    
     if (finalStatus !== 'granted') {
-      console.log('Notifikace nebyly povoleny');
+      console.log('[NotificationService] Notifikace nebyly povoleny');
       return null;
     }
-    
     try {
+      // Try to get Expo project ID from expo-constants, fallback to null for local testing
+      let projectId: string | undefined;
+      try {
+        const Constants = require('expo-constants').default;
+        projectId = Constants.expoConfig?.extra?.eas?.projectId;
+      } catch (e) {
+        console.log('[NotificationService] Nebylo možné zjistit project ID z expo-constants');
+      }
+
+      if (!projectId) {
+        console.log('[NotificationService] ⚠️  Project ID není nastaven - lokální notifikace budou fungovat, ale push notifikace ne');
+        // Return null - push notifikace se nebudou moci odeslat
+        return null;
+      }
       const tokenData = await Notifications.getExpoPushTokenAsync({
-        projectId: 'your-project-id', // Nahradit skutečným project ID
+        projectId,
       });
       token = tokenData.data;
-      console.log('Push token:', token);
+      console.log('[NotificationService] ✅ Push token:', token);
     } catch (error) {
-      console.log('Chyba při získávání push tokenu:', error);
+      console.log('[NotificationService] ❌ Chyba při získávání push tokenu:', error);
     }
   } else {
-    console.log('Push notifikace vyžadují fyzické zařízení');
+    console.log('[NotificationService] Push notifikace vyžadují fyzické zařízení');
   }
 
   return token;
@@ -175,4 +186,24 @@ export function addNotificationResponseListener(
   callback: (response: Notifications.NotificationResponse) => void
 ): Notifications.Subscription {
   return Notifications.addNotificationResponseReceivedListener(callback);
+}
+
+/**
+ * Helper function to add notification to notification center
+ * This will be called from components
+ */
+export function createNotificationCenterItem(
+  title: string,
+  message: string,
+  type: 'success' | 'error' | 'warning' | 'info' | 'reminder' = 'info',
+  purchaseId?: string,
+  data?: Record<string, any>
+) {
+  return {
+    title,
+    message,
+    type,
+    purchaseId,
+    data,
+  };
 }

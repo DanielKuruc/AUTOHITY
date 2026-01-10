@@ -10,6 +10,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,6 +18,8 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useToast } from '@/contexts/ToastContext';
+import { useNotificationCenter } from '@/contexts/NotificationCenterContext';
 import { PurchaseState, ClientType } from '@/constants/types';
 import { mockEmployees } from '@/constants/mockData';
 import { ImageGallery } from '@/components/ImageGallery';
@@ -53,20 +56,47 @@ const COUNTRY_CODES = [
 
 const formatPhoneWithFlag = (phone?: string | null): string | null => {
   if (!phone) return null;
-  // Find matching country code
+
+  let flagEmoji = '';
+  let phoneNumber = phone;
+
+  // Find matching country code and extract flag
   for (const country of COUNTRY_CODES) {
     if (phone.startsWith(country.code)) {
-      return `${country.flag} ${phone}`;
+      flagEmoji = country.flag;
+      break;
     }
   }
-  // Return phone as-is if no matching prefix
-  return phone;
+
+  // Format the phone with spaces every 3 digits
+  // Remove all non-digit characters first (except +)
+  const cleaned = phoneNumber.replace(/[^\d+]/g, '');
+
+  // Add spaces after country code prefix
+  let formatted = cleaned;
+  if (cleaned.startsWith('+')) {
+    const match = cleaned.match(/^(\+\d{1,3})(.*)$/);
+    if (match) {
+      const prefix = match[1];
+      const number = match[2];
+      // Add spaces every 3 digits in the number part
+      const spacedNumber = number.replace(/(\d{3})(?=\d)/g, '$1 ');
+      formatted = `${prefix} ${spacedNumber}`;
+    }
+  } else {
+    // No prefix, just add spaces every 3 digits
+    formatted = cleaned.replace(/(\d{3})(?=\d)/g, '$1 ');
+  }
+
+  return flagEmoji ? `${flagEmoji} ${formatted}` : formatted;
 };
 
 export default function PurchaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { theme } = useTheme();
   const { getPurchaseById, updatePurchase, deletePurchase } = usePurchases();
+  const { showToast } = useToast();
+  const { addNotification } = useNotificationCenter();
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [selectedDefectImageIndex, setSelectedDefectImageIndex] = useState<number | null>(null);
   // State pro modal dokončení výkupu
@@ -115,7 +145,7 @@ export default function PurchaseDetailScreen() {
       if (!isNaN(date.getTime())) {
         return date.toLocaleDateString('cs-CZ', {
           day: '2-digit',
-          month: 'long',
+          month: '2-digit',
           year: 'numeric'
         });
       }
@@ -125,7 +155,7 @@ export default function PurchaseDetailScreen() {
     if (!isNaN(date.getTime())) {
       return date.toLocaleDateString('cs-CZ', {
         day: '2-digit',
-        month: 'long',
+        month: '2-digit',
         year: 'numeric'
       });
     }
@@ -162,6 +192,9 @@ export default function PurchaseDetailScreen() {
     }
   };
 
+  const getPriceLabel = (state: PurchaseState) => {
+    return state === PurchaseState.COMPLETED ? 'Cena výkupu' : 'Cena nabídnuta';
+  };
   const getNextState = (currentState: PurchaseState): PurchaseState | null => {
     switch (currentState) {
       case PurchaseState.NEW: return PurchaseState.IN_PROGRESS;
@@ -184,24 +217,36 @@ export default function PurchaseDetailScreen() {
       // Pro ostatní stavy standardní alert
       Alert.alert('Aktualizovat stav', 'Zahájit zpracování tohoto výkupu?', [
         { text: 'Zrušit', style: 'cancel' },
-        { text: 'Zahájit zpracování', onPress: () => updatePurchase(purchase.id, { purchaseState: nextState }) }
+        { 
+          text: 'Zahájit zpracování', 
+          onPress: () => {
+            updatePurchase(purchase.id, { purchaseState: nextState });
+            addNotification({
+              title: 'Stav výkupu změněn',
+              message: `Výkup ${purchase.spz} - status: Probíhá`,
+              type: 'info',
+              purchaseId: purchase.id,
+            });
+            showToast('Výkup je nyní v procesu zpracování', 'info');
+          }
+        }
       ]);
     }
   };
 
   const handleCompletePurchase = () => {
     if (!completePurchasePrice.trim()) {
-      Alert.alert('Chyba', 'Prosím zadejte konečnou cenu výkupu');
+      showToast('Prosím zadejte konečnou cenu výkupu', 'error');
       return;
     }
     if (!completePurchaseDate.trim()) {
-      Alert.alert('Chyba', 'Prosím zadejte datum výkupu');
+      showToast('Prosím zadejte datum výkupu', 'error');
       return;
     }
 
     const priceValue = parseInt(completePurchasePrice.replace(/\s/g, ''));
     if (isNaN(priceValue) || priceValue <= 0) {
-      Alert.alert('Chyba', 'Prosím zadejte platnou cenu');
+      showToast('Prosím zadejte platnou cenu', 'error');
       return;
     }
 
@@ -215,7 +260,13 @@ export default function PurchaseDetailScreen() {
     });
 
     setShowCompleteModal(false);
-    Alert.alert('Úspěch', 'Výkup byl úspěšně dokončen');
+    showToast('Výkup byl úspěšně dokončen ✅', 'success');
+    addNotification({
+      title: 'Výkup dokončen',
+      message: `Výkup ${purchase.spz} - cena: ${formatAmount(priceValue)}`,
+      type: 'success',
+      purchaseId: purchase.id,
+    });
   };
 
   const handleCancelPurchase = () => {
@@ -270,6 +321,15 @@ export default function PurchaseDetailScreen() {
           <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>{label}</Text>
           <Text style={[styles.infoValue, { color: theme.text }]}>{value}</Text>
         </View>
+        {label === 'Telefon' && !!purchase.phone && (
+          <TouchableOpacity
+            accessibilityLabel="Zavolat klientovi"
+            onPress={() => Linking.openURL(`tel:${purchase.phone}`)}
+            style={[styles.callButton, { backgroundColor: theme.accent }]}
+          >
+            <Ionicons name="call" size={16} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
       </View>
     );
   };
@@ -310,12 +370,32 @@ export default function PurchaseDetailScreen() {
           <Ionicons name="chevron-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.text }]}>Detail výkupu</Text>
-        <TouchableOpacity 
-          style={[styles.moreButton, { backgroundColor: theme.inputBackground }]} 
-          onPress={handleExportPurchase}
-        >
-          <Ionicons name="share-social-outline" size={20} color={theme.text} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          {purchase.purchaseState === PurchaseState.IN_PROGRESS && (
+            <TouchableOpacity 
+              style={[styles.headerActionButton, styles.headerEditButton, { borderColor: theme.inputBackground }]}
+              onPress={() => router.push(`/purchase/edit-purchase?id=${purchase.id}`)}
+            >
+              <Ionicons name="create-outline" size={20} color={theme.text} />
+            </TouchableOpacity>
+          )}
+          {purchase.purchaseState === PurchaseState.IN_PROGRESS && (
+            <TouchableOpacity 
+              style={[styles.headerActionButton, styles.headerCancelButton, { borderColor: theme.error }]}
+              onPress={handleCancelPurchase}
+            >
+              <Ionicons name="close" size={20} color={theme.error} />
+            </TouchableOpacity>
+          )}
+          {getNextState(purchase.purchaseState) && (
+            <TouchableOpacity 
+              style={[styles.headerActionButton, styles.headerSuccessButton]}
+              onPress={handleStateUpdate}
+            >
+              <Ionicons name={getNextState(purchase.purchaseState) === PurchaseState.IN_PROGRESS ? 'play' : 'checkmark'} size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -433,13 +513,39 @@ export default function PurchaseDetailScreen() {
           <View style={styles.heroStats}>
             <View style={styles.heroStat}>
               <Text style={[styles.heroStatValue, { color: theme.text }]}>{formatAmount(purchase.totalAmount) || '—'}</Text>
-              <Text style={[styles.heroStatLabel, { color: theme.textSecondary }]}>Cena výkupu</Text>
+              <Text style={[styles.heroStatLabel, { color: theme.textSecondary }]}>{getPriceLabel(purchase.purchaseState)}</Text>
             </View>
-            <View style={[styles.heroStatDivider, { backgroundColor: theme.border }]} />
+            <View style={styles.heroStatDivider} />
             <View style={styles.heroStat}>
               <Text style={[styles.heroStatValue, { color: theme.text }]}>{car?.mileage ? Number(car.mileage).toLocaleString() : '—'}</Text>
               <Text style={[styles.heroStatLabel, { color: theme.textSecondary }]}>Kilometrů</Text>
             </View>
+          </View>
+
+          {/* Status Icons Row */}
+          <View style={styles.heroStatusIcons}>
+            {(car as any)?.hasServiceBook && (
+              <View style={styles.statusIconItem}>
+                <Ionicons name="checkmark-circle" size={20} color={theme.success} />
+                <Text style={[styles.statusIconLabel, { color: theme.textSecondary }]}>Servisní knížka</Text>
+              </View>
+            )}
+            {(car as any)?.isFirstOwner && (
+              <View style={styles.statusIconItem}>
+                <Ionicons name="checkmark-circle" size={20} color={theme.success} />
+                <Text style={[styles.statusIconLabel, { color: theme.textSecondary }]}>1. majitel</Text>
+              </View>
+            )}
+            <View style={styles.statusIconItem}>
+              <Text style={[styles.statusIconEmoji, { fontSize: 20 }]}>🇨🇿</Text>
+              <Text style={[styles.statusIconLabel, { color: theme.textSecondary }]}>ČR</Text>
+            </View>
+            {purchase.isVatPayer && (
+              <View style={styles.statusIconItem}>
+                <Ionicons name="checkmark-circle" size={20} color={theme.success} />
+                <Text style={[styles.statusIconLabel, { color: theme.textSecondary }]}>DPH</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -477,7 +583,7 @@ export default function PurchaseDetailScreen() {
             {renderInfoRow('Karoserie', (car as any).bodyType, 'cube-outline')}
             {renderInfoRow('Pohon', (car as any).driveType, 'compass-outline')}
             {renderInfoRow('STK', (car as any).stk, 'calendar-outline')}
-            {renderInfoRow('První registrace', (car as any).firstRegistration, 'time-outline')}
+            {renderInfoRow('První registrace', formatDate((car as any).firstRegistration), 'time-outline')}
             {renderBooleanRow('Dovoz', (car as any).isImport, 'airplane-outline')}
             {renderBooleanRow('První majitel', (car as any).isFirstOwner, 'person-circle-outline')}
             {renderBooleanRow('Servisní knížka', (car as any).hasServiceBook, 'book-outline')}
@@ -812,7 +918,13 @@ export default function PurchaseDetailScreen() {
                     notes: `${notesPrefix}Důvod zrušení: ${reasonText}`,
                   });
                   setShowCancelModal(false);
-                  Alert.alert('Zrušeno', 'Výkup byl zrušen');
+                  showToast('Výkup byl zrušen', 'warning');
+                  addNotification({
+                    title: 'Výkup zrušen',
+                    message: `Výkup ${purchase.spz} - důvod: ${reasonText}`,
+                    type: 'warning',
+                    purchaseId: purchase.id,
+                  });
                 }}
               >
                 <Ionicons name="close" size={20} color="#FFFFFF" />
@@ -828,10 +940,58 @@ export default function PurchaseDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
-  backButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600' },
-  moreButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  headerActionButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerEditButton: {
+    borderWidth: 1.5,
+    backgroundColor: 'transparent',
+  },
+  headerSuccessButton: {
+    backgroundColor: '#34C759',
+  },
+  headerCancelButton: {
+    borderWidth: 1.5,
+    backgroundColor: 'transparent',
+  },
+  moreButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   content: { flex: 1 },
   scrollContent: { paddingTop: 0 },
   notFoundContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
@@ -864,7 +1024,31 @@ const styles = StyleSheet.create({
   heroStat: { flex: 1, alignItems: 'center' },
   heroStatValue: { fontSize: 20, fontWeight: '700', marginBottom: 4 },
   heroStatLabel: { fontSize: 13 },
-  heroStatDivider: { width: 1, height: 40, marginHorizontal: 16 },
+  heroStatDivider: {
+    width: 1,
+    height: 50,
+    marginHorizontal: 16,
+  },
+  heroStatusIcons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  statusIconItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusIconEmoji: {
+    marginRight: 2,
+  },
+  statusIconLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
   section: { marginHorizontal: 16, marginBottom: 16, borderRadius: 16, overflow: 'hidden' },
   tightSection: {
     paddingBottom: 8,
@@ -932,4 +1116,5 @@ const styles = StyleSheet.create({
   modalButtonPrimaryText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   optionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, paddingHorizontal: 12 },
   optionLabel: { fontSize: 15 },
+  callButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
 });

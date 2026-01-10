@@ -239,7 +239,7 @@ export default function EditPurchaseScreen() {
       znacka: purchase.carDetails?.make || '---Výběr---',
       model: purchase.carDetails?.model || '---Výběr---',
       spz: purchase.spz || '',
-      motorovaVarianta: '---Výběr---', // TODO: přidat do typu Car
+      motorovaVarianta: purchase.carDetails?.fuelType || '---Výběr---', // load from fuel_type
       km: purchase.carDetails?.mileage?.toString() || '',
       vykon: purchase.carDetails?.engineSize?.replace(' kW', '') || '',
       palivo: purchase.carDetails?.fuelType || '---Výběr---',
@@ -352,7 +352,13 @@ export default function EditPurchaseScreen() {
     setLoading(true);
     try {
       // Rozděl fotky na existující (URL) a nové (lokální uri)
-      const isRemote = (u: string) => u.startsWith('http') || u.startsWith('/');
+      const isRemote = (u: string) => {
+        // Považujeme za vzdálené jen http/https a absolutní serverové cesty
+        if (u.startsWith('http://') || u.startsWith('https://')) return true;
+        if (u.startsWith('/')) return true; // server relative
+        // blob:, file:, content: = lokální (nutno nahrát)
+        return false;
+      };
       const vehicleExisting = images.filter(isRemote);
       const vehicleNew = images.filter((u) => !isRemote(u));
       const defectExisting = defectImages.filter(isRemote);
@@ -361,9 +367,11 @@ export default function EditPurchaseScreen() {
       // Nahraj nové fotografie
       let uploadedVehicle: string[] = [];
       let uploadedDefects: string[] = [];
+      console.log('[EditPurchase] vehicleNew:', vehicleNew.length, 'defectNew:', defectNew.length);
       if (vehicleNew.length > 0) {
         try {
           const res = await apiService.uploadPhotos(String(id), vehicleNew);
+          console.log('[EditPurchase] Vehicle upload result:', res);
           uploadedVehicle = res.files || [];
         } catch (e) {
           console.error('[EditPurchase] Upload vehicle images failed:', e);
@@ -372,6 +380,7 @@ export default function EditPurchaseScreen() {
       if (defectNew.length > 0) {
         try {
           const res = await apiService.uploadDefectPhotos(String(id), defectNew);
+          console.log('[EditPurchase] Defect upload result:', res);
           uploadedDefects = res.files || [];
         } catch (e) {
           console.error('[EditPurchase] Upload defect images failed:', e);
@@ -438,8 +447,10 @@ export default function EditPurchaseScreen() {
           vin: formData.vin || undefined,
           color: formData.barva || undefined,
           mileage: formData.km ? parseInt(formData.km) : undefined,
-          fuelType: formData.palivo !== '---Výběr---' ? formData.palivo : undefined,
           engineSize: formData.vykon ? `${formData.vykon} kW` : undefined,
+          // Map Motorová varianta -> fuel_type (DB) and keep variant optionally
+          fuelType: formData.motorovaVarianta !== '---Výběr---' ? formData.motorovaVarianta : (formData.palivo !== '---Výběr---' ? formData.palivo : undefined),
+          variant: formData.motorovaVarianta !== '---Výběr---' ? formData.motorovaVarianta : undefined,
           transmission: formData.prevodovka !== '---Výběr---' ? formData.prevodovka : undefined,
           bodyType: formData.karoserie !== '---Výběr---' ? formData.karoserie : undefined,
           driveType: formData.pohon !== '---Výběr---' ? formData.pohon : undefined,
@@ -507,13 +518,7 @@ export default function EditPurchaseScreen() {
     >
       <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>Základní informace</Text>
 
-      <SelectionPicker
-        label="Stav"
-        value={formData.stav}
-        options={STATES}
-        onSelect={(val) => updateField('stav', val)}
-        placeholder="---Výběr---"
-      />
+      {/* Stav odstraněn */}
 
       <SelectionPicker
         label="Výkupčí"
@@ -530,11 +535,15 @@ export default function EditPurchaseScreen() {
         placeholder="dd.mm.yyyy"
       />
 
-      <DatePickerField
-        label="Datum výkupu"
-        value={formData.datumVykupu}
-        onChange={(val) => updateField('datumVykupu', formatDate(val))}
-        placeholder="dd.mm.yyyy"
+      {/* Datum výkupu odstraněn */}
+
+      {/* Odkud zná - nové pole */}
+      <SelectionPicker
+        label="Odkud zná"
+        value={formData.odkudZna}
+        options={ODKUD_ZNA}
+        onSelect={(val) => updateField('odkudZna', val)}
+        placeholder="---Výběr---"
       />
 
       {renderInput('Cena zákazník', 'cenaZakaznik', { placeholder: '0', keyboardType: 'numeric' })}
@@ -631,7 +640,7 @@ export default function EditPurchaseScreen() {
       <WheelPicker
         label="Motorová varianta"
         value={formData.motorovaVarianta}
-        options={[]}
+        options={MOTOROVA_VARIANTA}
         onSelect={(val) => updateField('motorovaVarianta', val)}
         placeholder="---Výběr---"
       />

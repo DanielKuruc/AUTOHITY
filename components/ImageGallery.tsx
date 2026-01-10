@@ -1,18 +1,21 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Modal,
-  Image,
   TouchableOpacity,
   FlatList,
   Dimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Platform,
+  Image as RNImage,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as ExpoImage } from 'expo-image';
+import ZoomableImage from '@/components/ZoomableImage';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -28,6 +31,14 @@ export function ImageGallery({ images, visible, initialIndex, onClose }: ImageGa
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const flatListRef = useRef<FlatList>(null);
 
+  useEffect(() => {
+    if (visible) {
+      setCurrentIndex(initialIndex);
+      setTimeout(() => {
+        flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false });
+      }, 0);
+    }
+  }, [visible, initialIndex]);
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const offsetX = event.nativeEvent.contentOffset.x;
     const index = Math.round(offsetX / screenWidth);
@@ -48,11 +59,18 @@ export function ImageGallery({ images, visible, initialIndex, onClose }: ImageGa
 
   const renderImage = ({ item }: { item: string }) => (
     <View style={styles.imageContainer}>
-      <Image
-        source={{ uri: item }}
-        style={styles.fullImage}
-        resizeMode="contain"
-      />
+      {Platform.OS === 'web' ? (
+        <ExpoImage
+          source={{ uri: item }}
+          style={styles.fullImage}
+          contentFit="contain"
+          transition={150}
+          cachePolicy="memory-disk"
+          onError={(e) => console.warn('[ImageGallery] Web image error:', item, e.nativeEvent)}
+        />
+      ) : (
+        <ZoomableImage uri={item} />
+      )}
     </View>
   );
 
@@ -169,8 +187,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   fullImage: {
-    width: screenWidth,
-    height: screenHeight * 0.7,
+    width: '100%',
+    height: '80%',
   },
   navButton: {
     position: 'absolute',

@@ -17,9 +17,35 @@ CREATE TABLE IF NOT EXISTS users (
     INDEX idx_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Clients table (persons and companies)
+CREATE TABLE IF NOT EXISTS clients (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_type ENUM('person','company') NOT NULL,
+    -- person
+    first_name VARCHAR(100) NULL,
+    last_name VARCHAR(100) NULL,
+    -- company
+    company_name VARCHAR(255) NULL,
+    ico VARCHAR(20) NULL,
+    dic VARCHAR(20) NULL,
+    -- common
+    phone VARCHAR(50) NOT NULL,
+    -- address (company only)
+    street VARCHAR(255) NULL,
+    city VARCHAR(100) NULL,
+    postal_code VARCHAR(20) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_client_type (client_type),
+    INDEX idx_phone (phone),
+    INDEX idx_company_name (company_name),
+    INDEX idx_ico (ico)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Purchases table (matches PurchaseAPI::create/::update)
 CREATE TABLE IF NOT EXISTS purchases (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_id INT UNSIGNED NULL,
     client_name VARCHAR(255) NOT NULL,
     client_type VARCHAR(50) NULL,
     spz VARCHAR(20) NOT NULL,
@@ -45,11 +71,26 @@ CREATE TABLE IF NOT EXISTS purchases (
     defect_photos JSON NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_purchases_client FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL ON UPDATE CASCADE,
+    INDEX idx_client_id (client_id),
     INDEX idx_client_name (client_name),
     INDEX idx_spz (spz),
     INDEX idx_purchase_state (purchase_state),
     INDEX idx_employee_id (employee_id),
     INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- New table: purchase_photos (normalized storage for photos)
+CREATE TABLE IF NOT EXISTS purchase_photos (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    purchase_id INT UNSIGNED NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    photo_type ENUM('vehicle','defect') NOT NULL,
+    order_index INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_photos_purchase FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE,
+    INDEX idx_purchase (purchase_id),
+    INDEX idx_purchase_type_order (purchase_id, photo_type, order_index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Optional details for vehicle bound to purchase (not required by API)

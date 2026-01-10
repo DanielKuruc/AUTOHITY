@@ -53,13 +53,69 @@ class PurchaseAPI {
     public function create($data) {
         try {
             $data = $this->sanitize($data);
+
+            // Optional: upsert client and link
+            $clientId = null;
+            if (!empty($data['clientType']) || !empty($data['phone']) || !empty($data['companyInfo']) || !empty($data['clientName'])) {
+                // Split name for person if possible
+                $first = null; $last = null; $companyName = null;
+                if (($data['clientType'] ?? '') === 'company') {
+                    $companyName = $data['companyInfo']['companyName'] ?? ($data['clientName'] ?? null);
+                } else {
+                    $name = trim($data['clientName'] ?? '');
+                    if ($name) {
+                        $parts = preg_split('/\s+/', $name);
+                        $first = $parts[0] ?? null;
+                        $last = isset($parts[1]) ? implode(' ', array_slice($parts, 1)) : null;
+                    }
+                }
+                $ico = $data['companyInfo']['ico'] ?? null;
+                $dic = $data['companyInfo']['dic'] ?? null;
+                $phone = $data['phone'] ?? null;
+                $street = $data['street'] ?? null; $city = $data['city'] ?? null; $postal = $data['postalCode'] ?? null;
+                // Try find existing by phone or ico
+                $find = $this->db->prepare("SELECT id FROM clients WHERE (phone = :phone AND :phone IS NOT NULL) OR (ico = :ico AND :ico IS NOT NULL) LIMIT 1");
+                $find->execute([':phone' => $phone, ':ico' => $ico]);
+                $clientId = $find->fetchColumn();
+                if ($clientId) {
+                    $upd = $this->db->prepare("UPDATE clients SET client_type=:client_type, first_name=:first_name, last_name=:last_name, company_name=:company_name, ico=:ico, dic=:dic, phone=:phone, street=:street, city=:city, postal_code=:postal_code, updated_at=NOW() WHERE id=:id");
+                    $upd->execute([
+                        ':id' => $clientId,
+                        ':client_type' => ($data['clientType'] ?? 'person') === 'company' ? 'company' : 'person',
+                        ':first_name' => $first,
+                        ':last_name' => $last,
+                        ':company_name' => $companyName,
+                        ':ico' => $ico,
+                        ':dic' => $dic,
+                        ':phone' => $phone,
+                        ':street' => $street,
+                        ':city' => $city,
+                        ':postal_code' => $postal,
+                    ]);
+                } else {
+                    $ins = $this->db->prepare("INSERT INTO clients (client_type, first_name, last_name, company_name, ico, dic, phone, street, city, postal_code, created_at, updated_at) VALUES (:client_type, :first_name, :last_name, :company_name, :ico, :dic, :phone, :street, :city, :postal_code, NOW(), NOW())");
+                    $ins->execute([
+                        ':client_type' => ($data['clientType'] ?? 'person') === 'company' ? 'company' : 'person',
+                        ':first_name' => $first,
+                        ':last_name' => $last,
+                        ':company_name' => $companyName,
+                        ':ico' => $ico,
+                        ':dic' => $dic,
+                        ':phone' => $phone,
+                        ':street' => $street,
+                        ':city' => $city,
+                        ':postal_code' => $postal,
+                    ]);
+                    $clientId = $this->db->lastInsertId();
+                }
+            }
             $sql = "INSERT INTO purchases (
-                client_name, client_type, spz, purchase_date, purchase_state,
+                client_id, client_name, client_type, spz, purchase_date, purchase_state,
                 employee_id, total_amount, customer_price, offered_price,
                 expected_sale_price, is_vat_payer, is_counter_account, vin_verified, source_knowledge,
                 phone, street, city, postal_code, notes, inspection_date, company_info, created_at, updated_at
             ) VALUES (
-                :client_name, :client_type, :spz, :purchase_date, :purchase_state,
+                :client_id, :client_name, :client_type, :spz, :purchase_date, :purchase_state,
                 :employee_id, :total_amount, :customer_price, :offered_price,
                 :expected_sale_price, :is_vat_payer, :is_counter_account, :vin_verified, :source_knowledge,
                 :phone, :street, :city, :postal_code, :notes, :inspection_date, :company_info, NOW(), NOW()
@@ -67,6 +123,7 @@ class PurchaseAPI {
 
             $stmt = $this->db->prepare($sql);
             $stmt->execute([
+                ':client_id' => $clientId,
                 ':client_name' => $data['clientName'] ?? null,
                 ':client_type' => $data['clientType'] ?? null,
                 ':spz' => $data['spz'] ?? null,
@@ -121,7 +178,8 @@ class PurchaseAPI {
                     ':body_type' => $v['bodyType'] ?? null,
                     ':drive_type' => $v['driveType'] ?? null,
                     ':stk' => $v['stk'] ?? null,
-                    ':first_registration' => $this->normalizeDate($v['firstRegistration'] ?? null),
+                    // accept alias doProvozu from client as well
+                    ':first_registration' => $this->normalizeDate($v['firstRegistration'] ?? ($v['doProvozu'] ?? null)),
                     ':is_import' => !empty($v['isImport']) ? 1 : 0,
                     ':is_first_owner' => !empty($v['isFirstOwner']) ? 1 : 0,
                     ':has_service_book' => !empty($v['hasServiceBook']) ? 1 : 0,
@@ -211,13 +269,30 @@ class PurchaseAPI {
             $stmt->execute($params);
             $rows = $stmt->fetchAll();
 
-            // Enrich rows with component_statuses and decode JSON
+            // Enrich rows with component_statuses and decode photos
             $purchases = [];
             foreach ($rows as $row) {
                 $pid = $row['id'];
-                // Decode JSON columns
-                $row['photos'] = !empty($row['photos']) ? json_encode(json_decode($row['photos'], true)) : json_encode([]);
-                $row['defect_photos'] = !empty($row['defect_photos']) ? json_encode(json_decode($row['defect_photos'], true)) : json_encode([]);
+                // Prefer normalized table for photos
+                $stmtP = $this->db->prepare("SELECT file_path, photo_type FROM purchase_photos WHERE purchase_id = :pid ORDER BY photo_type, order_index, id");
+                $stmtP->execute([':pid' => $pid]);
+                $photoRows = $stmtP->fetchAll();
+                $veh = [];
+                $def = [];
+                if ($photoRows) {
+                    foreach ($photoRows as $pr) {
+                        if ($pr['photo_type'] === 'vehicle') $veh[] = $pr['file_path'];
+                        if ($pr['photo_type'] === 'defect') $def[] = $pr['file_path'];
+                    }
+                }
+                if (empty($veh)) {
+                    $veh = !empty($row['photos']) ? (json_decode($row['photos'], true) ?? []) : [];
+                }
+                if (empty($def)) {
+                    $def = !empty($row['defect_photos']) ? (json_decode($row['defect_photos'], true) ?? []) : [];
+                }
+                $row['photos'] = json_encode($veh);
+                $row['defect_photos'] = json_encode($def);
                 $row['company_info'] = !empty($row['company_info']) ? $row['company_info'] : null;
 
                 // Map vehicle to nested object-like structure; client mapper will camelCase keys
@@ -294,9 +369,26 @@ class PurchaseAPI {
                 throw new Exception('Purchase not found');
             }
 
-            // Decode JSON and attach nested
-            $row['photos'] = !empty($row['photos']) ? json_encode(json_decode($row['photos'], true)) : json_encode([]);
-            $row['defect_photos'] = !empty($row['defect_photos']) ? json_encode(json_decode($row['defect_photos'], true)) : json_encode([]);
+            // Decode photos: prefer normalized table purchase_photos, fallback to JSON columns
+            $stmtP = $this->db->prepare("SELECT file_path, photo_type FROM purchase_photos WHERE purchase_id = :pid ORDER BY photo_type, order_index, id");
+            $stmtP->execute([':pid' => $id]);
+            $photoRows = $stmtP->fetchAll();
+            $veh = [];
+            $def = [];
+            if ($photoRows) {
+                foreach ($photoRows as $pr) {
+                    if ($pr['photo_type'] === 'vehicle') $veh[] = $pr['file_path'];
+                    if ($pr['photo_type'] === 'defect') $def[] = $pr['file_path'];
+                }
+            }
+            if (empty($veh)) {
+                $veh = !empty($row['photos']) ? (json_decode($row['photos'], true) ?? []) : [];
+            }
+            if (empty($def)) {
+                $def = !empty($row['defect_photos']) ? (json_decode($row['defect_photos'], true) ?? []) : [];
+            }
+            $row['photos'] = json_encode($veh);
+            $row['defect_photos'] = json_encode($def);
             $row['company_info'] = !empty($row['company_info']) ? $row['company_info'] : null;
 
             $car = null;
@@ -348,9 +440,64 @@ class PurchaseAPI {
 
             $data = $this->sanitize($data);
 
+            // Upsert client if provided
+            $clientId = null;
+            if (!empty($data['clientType']) || !empty($data['phone']) || !empty($data['companyInfo']) || !empty($data['clientName'])) {
+                $first = null; $last = null; $companyName = null;
+                if (($data['clientType'] ?? '') === 'company') {
+                    $companyName = $data['companyInfo']['companyName'] ?? ($data['clientName'] ?? null);
+                } else {
+                    $name = trim($data['clientName'] ?? '');
+                    if ($name) {
+                        $parts = preg_split('/\s+/', $name);
+                        $first = $parts[0] ?? null;
+                        $last = isset($parts[1]) ? implode(' ', array_slice($parts, 1)) : null;
+                    }
+                }
+                $ico = $data['companyInfo']['ico'] ?? null;
+                $dic = $data['companyInfo']['dic'] ?? null;
+                $phone = $data['phone'] ?? null;
+                $street = $data['street'] ?? null; $city = $data['city'] ?? null; $postal = $data['postalCode'] ?? null;
+                $find = $this->db->prepare("SELECT id FROM clients WHERE (phone = :phone AND :phone IS NOT NULL) OR (ico = :ico AND :ico IS NOT NULL) LIMIT 1");
+                $find->execute([':phone' => $phone, ':ico' => $ico]);
+                $clientId = $find->fetchColumn();
+                if ($clientId) {
+                    $upd = $this->db->prepare("UPDATE clients SET client_type=:client_type, first_name=:first_name, last_name=:last_name, company_name=:company_name, ico=:ico, dic=:dic, phone=:phone, street=:street, city=:city, postal_code=:postal_code, updated_at=NOW() WHERE id=:id");
+                    $upd->execute([
+                        ':id' => $clientId,
+                        ':client_type' => ($data['clientType'] ?? 'person') === 'company' ? 'company' : 'person',
+                        ':first_name' => $first,
+                        ':last_name' => $last,
+                        ':company_name' => $companyName,
+                        ':ico' => $ico,
+                        ':dic' => $dic,
+                        ':phone' => $phone,
+                        ':street' => $street,
+                        ':city' => $city,
+                        ':postal_code' => $postal,
+                    ]);
+                } else {
+                    $ins = $this->db->prepare("INSERT INTO clients (client_type, first_name, last_name, company_name, ico, dic, phone, street, city, postal_code, created_at, updated_at) VALUES (:client_type, :first_name, :last_name, :company_name, :ico, :dic, :phone, :street, :city, :postal_code, NOW(), NOW())");
+                    $ins->execute([
+                        ':client_type' => ($data['clientType'] ?? 'person') === 'company' ? 'company' : 'person',
+                        ':first_name' => $first,
+                        ':last_name' => $last,
+                        ':company_name' => $companyName,
+                        ':ico' => $ico,
+                        ':dic' => $dic,
+                        ':phone' => $phone,
+                        ':street' => $street,
+                        ':city' => $city,
+                        ':postal_code' => $postal,
+                    ]);
+                    $clientId = $this->db->lastInsertId();
+                }
+            }
             $sql = "UPDATE purchases SET ";
             $params = [':id' => $id];
             $updates = [];
+
+            if ($clientId) { $updates[] = 'client_id = :client_id'; $params[':client_id'] = $clientId; }
 
             $map = [
                 'clientName' => 'client_name',
@@ -425,7 +572,7 @@ class PurchaseAPI {
                     ':body_type' => $v['bodyType'] ?? null,
                     ':drive_type' => $v['driveType'] ?? null,
                     ':stk' => $v['stk'] ?? null,
-                    ':first_registration' => $this->normalizeDate($v['firstRegistration'] ?? null),
+                    ':first_registration' => $this->normalizeDate($v['firstRegistration'] ?? ($v['doProvozu'] ?? null)),
                     ':is_import' => !empty($v['isImport']) ? 1 : 0,
                     ':is_first_owner' => !empty($v['isFirstOwner']) ? 1 : 0,
                     ':has_service_book' => !empty($v['hasServiceBook']) ? 1 : 0,
@@ -496,7 +643,18 @@ class PurchaseAPI {
                 throw new Exception('No files uploaded successfully');
             }
 
-            // Ulož cesty fotek do nákupu (jako JSON)
+            // Persist also into normalized table purchase_photos (type vehicle)
+            $maxQ = $this->db->prepare("SELECT COALESCE(MAX(order_index), -1) FROM purchase_photos WHERE purchase_id = :pid AND photo_type = 'vehicle'");
+            $maxQ->execute([':pid' => $id]);
+            $startIndex = intval($maxQ->fetchColumn());
+            $ins = $this->db->prepare("INSERT INTO purchase_photos (purchase_id, file_path, photo_type, order_index, created_at) VALUES (:pid, :path, 'vehicle', :ord, NOW())");
+            $i = 0;
+            foreach ($result['files'] as $path) {
+                $i++;
+                $ins->execute([':pid' => $id, ':path' => $path, ':ord' => $startIndex + $i]);
+            }
+
+            // Backward compatible JSON update in purchases.photos
             $sql = "UPDATE purchases SET photos = :photos, updated_at = NOW() WHERE id = :id";
             $existingPhotos = [];
             $existingPurchase = $this->db->prepare("SELECT photos FROM purchases WHERE id = :id");
@@ -505,14 +663,9 @@ class PurchaseAPI {
             if ($row && $row['photos']) {
                 $existingPhotos = json_decode($row['photos'], true) ?? [];
             }
-
             $allPhotos = array_merge($existingPhotos, $result['files']);
-
             $stmt = $this->db->prepare($sql);
-            $stmt->execute([
-                ':id' => $id,
-                ':photos' => json_encode($allPhotos),
-            ]);
+            $stmt->execute([':id' => $id, ':photos' => json_encode($allPhotos)]);
 
             return [
                 'success' => true,
@@ -535,6 +688,17 @@ class PurchaseAPI {
             if (!$result['success']) {
                 throw new Exception('No defect photos uploaded successfully');
             }
+            // Persist also into normalized table purchase_photos (type defect)
+            $maxQ = $this->db->prepare("SELECT COALESCE(MAX(order_index), -1) FROM purchase_photos WHERE purchase_id = :pid AND photo_type = 'defect'");
+            $maxQ->execute([':pid' => $id]);
+            $startIndex = intval($maxQ->fetchColumn());
+            $ins = $this->db->prepare("INSERT INTO purchase_photos (purchase_id, file_path, photo_type, order_index, created_at) VALUES (:pid, :path, 'defect', :ord, NOW())");
+            $i = 0;
+            foreach ($result['files'] as $path) {
+                $i++;
+                $ins->execute([':pid' => $id, ':path' => $path, ':ord' => $startIndex + $i]);
+            }
+            // Backward compatible JSON update
             $sql = "UPDATE purchases SET defect_photos = :photos, updated_at = NOW() WHERE id = :id";
             $existing = [];
             $q = $this->db->prepare("SELECT defect_photos FROM purchases WHERE id = :id");
@@ -565,6 +729,10 @@ class PurchaseAPI {
             $photos = array_filter($photos, function($photo) use ($filename) {
                 return $photo !== $filename && !strpos($photo, $filename);
             });
+
+            // Remove from normalized table as well
+            $delP = $this->db->prepare("DELETE FROM purchase_photos WHERE purchase_id = :pid AND (file_path = :fp OR file_path LIKE CONCAT('%', :fn))");
+            $delP->execute([':pid' => $id, ':fp' => $filename, ':fn' => $filename]);
 
             FileUpload::deleteFile($filename);
 

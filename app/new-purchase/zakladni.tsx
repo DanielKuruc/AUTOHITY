@@ -13,12 +13,10 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SelectionPicker } from '@/components/SelectionPicker';
 
-const STATES = ['---Výběr---', 'Nový', 'Probíhá', 'Dokončen', 'Zrušen'];
 const BUYERS = ['Kuruc Daniel', 'Jan Novák', 'Petr Svoboda', 'Marie Dvořáková'];
 
 export default function ZakladniScreen() {
   const [formData, setFormData] = useState({
-    stav: '---Výběr---',
     vykupci: 'Kuruc Daniel',
     datumProhlidky: '18.09.2025 12:30',
     datumVykupu: '18.09.2025 12:30',
@@ -100,14 +98,6 @@ export default function ZakladniScreen() {
         {/* Basic Information */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Základní informace</Text>
-
-          <SelectionPicker
-            label="Stav"
-            value={formData.stav}
-            options={STATES}
-            onSelect={(value) => updateField('stav', value)}
-            placeholder="---Výběr---"
-          />
 
           <SelectionPicker
             label="Výkupčí"

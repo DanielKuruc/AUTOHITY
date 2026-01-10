@@ -68,7 +68,7 @@ const PURCHASE_TABS = [
   },
 ];
 
-const STATES = ['---Výběr---', 'Nový', 'Probíhá', 'Dokončen', 'Zrušen'];
+// Removed STATES array as 'Stav' field is removed from form
 const BUYERS = ['Kuruc Daniel', 'Jan Novák', 'Petr Svoboda', 'Marie Dvořáková'];
 const MOTOROVA_VARIANTA = ['---Výběr---', '1.0 TSI', '1.4 TFSI', '1.6 TDI', '2.0 TDI', '2.0 TFSI', '3.0 TDI'];
 const PREVODOVKA = ['---Výběr---', 'Automatická', 'Manuální'];
@@ -368,7 +368,7 @@ export default function NewPurchaseScreen() {
   };
   // Form data for all tabs
   const [zakladniData, setZakladniData] = useState({
-    stav: 'Nový',
+    // Removed 'stav' field from state as per update instructions
     vykupci: 'Kuruc Daniel',
     datumProhlidky: formatToday(),
     datumVykupu: '',
@@ -759,11 +759,8 @@ export default function NewPurchaseScreen() {
   const performSave = async () => {
     setLoading(true);
     try {
-      // Determine purchase state
-      let purchaseState = PurchaseState.NEW;
-      if (zakladniData.stav === 'Probíhá') purchaseState = PurchaseState.IN_PROGRESS;
-      else if (zakladniData.stav === 'Dokončen') purchaseState = PurchaseState.COMPLETED;
-      else if (zakladniData.stav === 'Zrušen') purchaseState = PurchaseState.CANCELLED;
+      // Default purchase state as per update instructions
+      const purchaseState = PurchaseState.NEW;
 
       // Get client name
       const clientName = zakladniData.firma 
@@ -1060,13 +1057,7 @@ export default function NewPurchaseScreen() {
     <ScrollView ref={zakladniRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: theme.text }]}>Základní informace</Text>
 
-      <SelectionPicker
-        label="Stav"
-        value={zakladniData.stav}
-        options={STATES}
-        onSelect={(value) => setZakladniData(prev => ({ ...prev, stav: value }))}
-        placeholder="---Výběr---"
-      />
+      {/* Removed Stav selection picker as per update instructions */}
 
       <SelectionPicker
         label="Výkupčí"
