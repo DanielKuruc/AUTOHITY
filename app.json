@@ -1,0 +1,78 @@
+{
+  "name": "AUTOHITY Výkup",
+  "slug": "autohity-vykup",
+  "version": "1.1.0",
+  "orientation": "portrait",
+  "icon": "./assets/images/autohity-logo.png",
+  "scheme": "autohity",
+  "userInterfaceStyle": "automatic",
+  "newArchEnabled": true,
+  "ios": {
+    "supportsTablet": true,
+    "infoPlist": {
+      "NSCameraUsageDescription": "Tato aplikace používá fotoaparát k pořizování fotografií vozidel během vytváření výkupů.",
+      "NSPhotoLibraryUsageDescription": "Tato aplikace přistupuje k fotogalerii za účelem výběru fotografií vozidel během vytváření výkupů.",
+      "ITSAppUsesNonExemptEncryption": false
+    },
+    "bundleIdentifier": "com.danielkuruc.autohityvykup"
+  },
+  "android": {
+    "adaptiveIcon": {
+      "foregroundImage": "./assets/images/adaptive-icon.png",
+      "backgroundColor": "#ffffff"
+    },
+    "edgeToEdgeEnabled": true,
+    "permissions": [
+      "android.permission.CAMERA",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+      "android.permission.RECORD_AUDIO"
+    ],
+    "package": "com.danielkuruc.autohityvykup"
+  },
+  "web": {
+    "bundler": "metro",
+    "output": "single",
+    "favicon": "./assets/images/autohity-logo.png"
+  },
+  "plugins": [
+    "expo-router",
+    [
+      "expo-notifications",
+      {
+        "icon": "./assets/images/autohity-logo.png",
+        "color": "#0066FF",
+        "mode": "production"
+      }
+    ],
+    [
+      "expo-splash-screen",
+      {
+        "image": "./assets/images/splash-icon.png",
+        "imageWidth": 200,
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      }
+    ],
+    [
+      "expo-camera",
+      {
+        "cameraPermission": "Povolte aplikaci AUTOHITY - Výkup přístup k fotoaparátu, aby mohla pořizovat fotografie vozidel během vytváření výkupů."
+      }
+    ],
+    [
+      "expo-image-picker",
+      {
+        "photosPermission": "Povolte aplikaci AUTOHITY - Výkup přístup k fotogalerii, aby mohla vybírat fotografie vozidel během vytváření výkupů."
+      }
+    ]
+  ],
+  "experiments": {
+    "typedRoutes": true
+  },
+  "extra": {
+    "eas": {
+      "projectId": "faed4e2d-53bb-4c54-ba3c-9fb09c2b0619"
+    }
+  }
+}
