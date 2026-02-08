@@ -46,7 +46,6 @@ class AuthApiService {
    * Přihlášení - POST /api/account/sign-in
    */
   async login(userName: string, password: string): Promise<LoginResponse> {
-    console.log('[AuthApiService] Login:', userName);
     const response = await fetch(`${AUTH_API_URL}/sign-in`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -63,18 +62,12 @@ class AuthApiService {
     // Parsuj JWT aby jsme dostal dodatečné info (jméno, příjmení, atd.)
     const decoded = this.parseJwt(data.token);
     if (decoded) {
-      console.log('[AuthApiService] JWT decoded:', {
-        sub: decoded.sub,
-        given_name: decoded.given_name,
-        family_name: decoded.family_name,
-      });
       data.given_name = decoded.given_name;
       data.family_name = decoded.family_name;
       if (decoded.sub && !data.id) {
         data.id = parseInt(decoded.sub, 10);
       }
     }
-    console.log('[AuthApiService] Login successful');
     return data;
   }
 
@@ -82,7 +75,6 @@ class AuthApiService {
    * Získej profil - GET /api/account/profile
    */
   async getProfile(token: string): Promise<ProfileResponse> {
-    console.log('[AuthApiService] Fetching profile');
     const response = await fetch(`${AUTH_API_URL}/profile`, {
       method: 'GET',
       headers: {
@@ -105,7 +97,6 @@ class AuthApiService {
    * Odhlášení
    */
   async logout(): Promise<void> {
-    console.log('[AuthApiService] Logout');
     // TODO: Zavolaj endpoint /api/account/sign-out když je dostupný
     await AsyncStorage.removeItem('authToken');
   }

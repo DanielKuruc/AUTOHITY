@@ -3,7 +3,6 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { SchedulableTriggerInputTypes } from 'expo-notifications';
 import { Platform } from 'react-native';
-import { apiService } from './apiService';
 
 /**
  * PUSH NOTIFICATIONS SERVICE
@@ -33,19 +32,15 @@ Notifications.setNotificationHandler({
  */
 export async function getExpoPushToken(): Promise<string | null> {
   try {
-    // On simulator, return null - we'll use in-app notifications
     if (!Device.isDevice) {
-      console.log('[PushNotifications] Running on simulator - using in-app notifications fallback');
       return null;
     }
 
-    // On physical device, get the Expo push token
     const projectId = Constants.expoConfig?.extra?.eas?.projectId ||
                       Constants.easConfig?.projectId ||
                       'unknown';
 
     if (projectId === 'unknown') {
-      console.warn('[PushNotifications] No projectId found - cannot get push token');
       return null;
     }
 
@@ -53,10 +48,8 @@ export async function getExpoPushToken(): Promise<string | null> {
       projectId: projectId,
     });
 
-    console.log('[PushNotifications] Token obtained:', token.data.substring(0, 20) + '...');
     return token.data;
   } catch (error) {
-    console.error('[PushNotifications] Failed to get token:', error);
     return null;
   }
 }
@@ -67,22 +60,16 @@ export async function getExpoPushToken(): Promise<string | null> {
 export async function requestNotificationPermissions(): Promise<boolean> {
   try {
     if (!Device.isDevice) {
-      console.log('[PushNotifications] Simulator - skipping permissions request');
       return true;
     }
 
     if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
-      console.log('[PushNotifications] Non-mobile platform - skipping permissions');
       return true;
     }
 
     const { status } = await Notifications.requestPermissionsAsync();
-    const granted = status === 'granted';
-
-    console.log('[PushNotifications] Notification permissions:', status);
-    return granted;
+    return status === 'granted';
   } catch (error) {
-    console.error('[PushNotifications] Permission request failed:', error);
     return false;
   }
 }
@@ -94,23 +81,62 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 export async function registerPushTokenWithBackend(
   userId: number,
   expoToken: string | null
-): Promise<boolean> {
+): Promise<{ success: boolean; error?: string }> {
   try {
     if (!expoToken) {
-      console.log('[PushNotifications] No token to register (simulator/fallback mode)');
-      return true; // Still consider it success - we'll use in-app notifications
+      return { success: true };
     }
 
-    const response = await apiService.post('/register_push_token.php', {
-      user_id: userId,
-      expo_token: expoToken,
+    const PHP_BASE = process.env.EXPO_PUBLIC_PHP_API_BASE || 'https://autohity.cz';
+    const API_BASE_URL = `${PHP_BASE}/php-api`;
+    const url = `${API_BASE_URL}/register_push_token.php`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        expo_token: expoToken,
+      }),
     });
 
-    console.log('[PushNotifications] Token registered with backend');
-    return response.success === true;
-  } catch (error) {
-    console.error('[PushNotifications] Failed to register token:', error);
-    return false;
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      return { 
+        success: false, 
+        error: `HTTP ${response.status}: ${responseText}` 
+      };
+    }
+
+    let responseData: any = {};
+    try {
+      responseData = JSON.parse(responseText);
+    } catch (e) {
+      return { 
+        success: false, 
+        error: `Invalid response: ${responseText}` 
+      };
+    }
+
+    if (responseData.success === true) {
+      return { success: true };
+    } else {
+      const errorMsg = responseData.error || responseData.message || 'Unknown backend error';
+      return { 
+        success: false, 
+        error: `Backend error: ${errorMsg}` 
+      };
+    }
+  } catch (error: any) {
+    const errorMsg = error.message || String(error);
+    return { 
+      success: false, 
+      error: `Request failed: ${errorMsg}` 
+    };
   }
 }
 
@@ -125,28 +151,14 @@ export function setupNotificationListeners(
   onNotificationReceived?: (notification: Notifications.Notification) => void,
   onNotificationResponse?: (notification: Notifications.Notification) => void
 ) {
-  // Listen for notifications when app is open
   const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
-    console.log('[PushNotifications] Notification received while app open:', {
-      title: notification.request.content.title,
-      body: notification.request.content.body,
-    });
-
     onNotificationReceived?.(notification);
   });
 
-  // Listen for user tapping on notification
   const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
-    const notification = response.notification;
-    console.log('[PushNotifications] User tapped notification:', {
-      title: notification.request.content.title,
-      body: notification.request.content.body,
-    });
-
-    onNotificationResponse?.(notification);
+    onNotificationResponse?.(response.notification);
   });
 
-  // Return cleanup function
   return () => {
     receivedSubscription.remove();
     responseSubscription.remove();
@@ -159,34 +171,25 @@ export function setupNotificationListeners(
  */
 export async function initializePushNotifications(userId: number): Promise<void> {
   try {
-    console.log('[PushNotifications] Initializing...');
-
-    // ✅ On simulator - use in-app notifications only
     if (!Device.isDevice) {
-      console.log('[PushNotifications] Simulator detected - using in-app notifications only');
       return;
     }
 
-    // ✅ Explicitly evaluate permission result
     const permissionGranted = await requestNotificationPermissions();
 
-    // ✅ If permission NOT granted - stop here
     if (!permissionGranted) {
-      console.warn('[PushNotifications] Notification permission denied - push tokens cannot be obtained');
       return;
     }
 
-    // ✅ Get token ONLY if permission is granted
     const token = await getExpoPushToken();
 
-    // ✅ Register with backend ONLY if token exists
-    if (token) {
-      await registerPushTokenWithBackend(userId, token);
+    if (!token) {
+      return;
     }
 
-    console.log('[PushNotifications] Initialization complete');
+    await registerPushTokenWithBackend(userId, token);
   } catch (error) {
-    console.error('[PushNotifications] Initialization failed:', error);
+    // Silently fail - notifications are not critical
   }
 }
 
@@ -211,9 +214,7 @@ export async function scheduleLocalNotification(
       },
       trigger: { type: SchedulableTriggerInputTypes.TIME_INTERVAL, seconds },
     });
-
-    console.log('[PushNotifications] Local notification scheduled:', title);
   } catch (error) {
-    console.error('[PushNotifications] Failed to schedule notification:', error);
+    // Silently fail
   }
 }

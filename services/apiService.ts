@@ -1,8 +1,7 @@
 import { Purchase } from '@/constants/types';
-import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
 const PHP_BASE = process.env.EXPO_PUBLIC_PHP_API_BASE || 'https://autohity.cz';
@@ -24,7 +23,6 @@ const absolutizeUrl = (u: string): string => {
 let globalJwtToken: string | null = null;
 export const setGlobalJwtToken = (_token: string | null) => {
   globalJwtToken = null;
-  console.log('[ApiService] JWT token disabled (no longer used)');
 };
 const getAuthToken = (): string | null => null;
 
@@ -308,7 +306,6 @@ class ApiService {
    */
   async getPurchases(): Promise<Purchase[]> {
     try {
-      console.log('[ApiService] Načítám výkupy ze serveru...');
 
       const response = await fetch(`${API_BASE_URL}/purchases`, {
         method: 'GET',
@@ -354,7 +351,6 @@ class ApiService {
         if (Array.isArray(p.defectImages)) p.defectImages = p.defectImages.map((x: string) => absolutizeUrl(x));
         if (p.coverPhotoUri) p.coverPhotoUri = absolutizeUrl(p.coverPhotoUri);
       });
-      console.log('[ApiService] Výkupy načteny:', transformed);
 
       return transformed;
     } catch (error: any) {
@@ -368,7 +364,6 @@ class ApiService {
    */
   async getPurchaseById(id: string): Promise<Purchase> {
     try {
-      console.log(`[ApiService] Načítám výkup ID: ${id}`);
 
       const response = await fetch(`${API_BASE_URL}/purchases/${id}`, {
         method: 'GET',
@@ -410,7 +405,6 @@ class ApiService {
       if (Array.isArray((transformed as any).images)) (transformed as any).images = (transformed as any).images.map((x: string) => absolutizeUrl(x));
       if (Array.isArray((transformed as any).defectImages)) (transformed as any).defectImages = (transformed as any).defectImages.map((x: string) => absolutizeUrl(x));
       if ((transformed as any).coverPhotoUri) (transformed as any).coverPhotoUri = absolutizeUrl((transformed as any).coverPhotoUri);
-      console.log('[ApiService] Výkup načten:', transformed);
 
       return transformed;
     } catch (error: any) {
@@ -424,7 +418,6 @@ class ApiService {
    */
   async updatePurchase(id: string, purchase: Partial<Purchase>): Promise<any> {
     try {
-      console.log(`[ApiService] Aktualizuji výkup ID: ${id}`);
 
       // IMPORTANT: Only include fields that are explicitly provided in the purchase object
       // Do NOT normalize/reset fields that aren't included (e.g., inspectionDate, inspectionTime)
@@ -477,7 +470,6 @@ class ApiService {
       }
 
       const result = await response.json();
-      console.log('[ApiService] Výkup aktualizován:', result);
 
       return result;
     } catch (error: any) {
@@ -490,7 +482,6 @@ class ApiService {
    * Smaže výkup
    */
   async deletePurchase(id: string): Promise<void> {
-    console.log('[ApiService] Mažu výkup ID:', id);
     const response = await fetch(`${API_BASE_URL}/purchases/${id}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
@@ -500,7 +491,6 @@ class ApiService {
       console.error('[ApiService] Delete failed:', response.status, text);
       throw new Error(`Chyba při mazání: ${response.status}`);
     }
-    console.log('[ApiService] Delete OK:', text);
   }
 
   /**
@@ -525,7 +515,6 @@ class ApiService {
       }
 
       const url = `${API_BASE_URL}/purchases?${queryParams.toString()}`;
-      console.log('[ApiService] Search URL:', url);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -550,9 +539,7 @@ class ApiService {
    */
   async login(userName: string, password: string): Promise<any> {
     try {
-      console.log('[ApiService] Přihlášení - userName:', userName);
       const url = 'https://app.autohity.cz/api/account/sign-in';
-      console.log('[ApiService] API URL:', url);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -562,12 +549,9 @@ class ApiService {
         body: JSON.stringify({ userName, password }),
       });
 
-      console.log('[ApiService] Response status:', response.status);
-      console.log('[ApiService] Response ok:', response.ok);
 
       // Přečti text nejdřív (abychom mohli debugovat)
       const responseText = await response.text();
-      console.log('[ApiService] Response text:', responseText);
 
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}`;
@@ -590,7 +574,6 @@ class ApiService {
         throw new Error('Load failed: Invalid response format');
       }
 
-      console.log('[ApiService] Přihlášení úspěšné:', result);
 
       // Validace - ověř, že máme token
       if (!result.token) {
@@ -623,14 +606,12 @@ class ApiService {
    */
   async getProfile(): Promise<any> {
     try {
-      console.log('[ApiService] Načítám profil uživatele...');
       const token = await AsyncStorage.getItem('jwtToken');
       if (!token) {
         throw new Error('Token není k dispozici');
       }
 
       const url = 'https://app.autohity.cz/api/account/profile';
-      console.log('[ApiService] Profile URL:', url);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -640,14 +621,12 @@ class ApiService {
         },
       });
 
-      console.log('[ApiService] Profile response status:', response.status);
 
       if (!response.ok) {
         throw new Error(`Načtení profilu selhalo: ${response.status}`);
       }
 
       const profileData = await response.json();
-      console.log('[ApiService] Profil načten:', profileData);
 
       return {
         success: true,
@@ -672,7 +651,6 @@ class ApiService {
    */
   async logout(): Promise<void> {
     try {
-      console.log('[ApiService] Odhlášení');
       await AsyncStorage.removeItem('jwtToken'); // už se nepoužívá, ale čistíme případné zbytky
       setGlobalJwtToken(null); // no-op
     } catch (error: any) {
@@ -703,7 +681,6 @@ class ApiService {
    */
   async exportPurchasesAsCSV(purchases: Purchase[]): Promise<string> {
     try {
-      console.log('[ApiService] Export nákupů jako CSV');
       const headers = [
         'ID',
         'Klient',
@@ -762,11 +739,9 @@ class ApiService {
   async uploadPhotos(purchaseId: string, photoUris: string[]): Promise<{ success: boolean; files: string[] }> {
     try {
       if (!photoUris || photoUris.length === 0) {
-        console.log('[ApiService] uploadPhotos: no photoUris provided, skipping');
         return { success: true, files: [] };
       }
       const pid = String(purchaseId).trim();
-      console.log(`[ApiService] Uploaduji ${photoUris.length} fotek pro nákup ID: ${pid}`);
 
       // Compress + ensure local files before upload
       const preparedFiles: { uri: string; name: string; type: string }[] = [];
@@ -826,18 +801,15 @@ class ApiService {
 
       const headers: Record<string, string> = { Accept: 'application/json' };
       const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-images`;
-      console.log('[ApiService] Upload URL:', url);
       const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
 
       const text = await uploadResponse.text();
-      console.log('[ApiService] Upload response status/text:', uploadResponse.status, text);
       if (!uploadResponse.ok) {
         throw new Error(`Upload fotek selhal: ${uploadResponse.status} - ${text}`);
       }
 
       let result: any = {};
       try { result = JSON.parse(text); } catch { result = { files: [] }; }
-      console.log('[ApiService] Fotky uploadovány:', result);
 
       return { success: true, files: result.files || [] };
     } catch (error: any) {
@@ -849,11 +821,9 @@ class ApiService {
   async uploadDefectPhotos(purchaseId: string, photoUris: string[]): Promise<{ success: boolean; files: string[] }> {
     try {
       if (!photoUris || photoUris.length === 0) {
-        console.log('[ApiService] uploadDefectPhotos: no photoUris provided, skipping');
         return { success: true, files: [] };
       }
       const pid = String(purchaseId).trim();
-      console.log(`[ApiService] Uploaduji ${photoUris.length} fotek vad pro nákup ID: ${pid}`);
 
       const preparedFiles: { uri: string; name: string; type: string }[] = [];
       let index = 0;
@@ -902,16 +872,13 @@ class ApiService {
       }
       const headers: Record<string, string> = { Accept: 'application/json' };
       const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-defect-images`;
-      console.log('[ApiService] Defect upload URL:', url);
       const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
       const text = await uploadResponse.text();
-      console.log('[ApiService] Defect upload response status/text:', uploadResponse.status, text);
       if (!uploadResponse.ok) {
         throw new Error(`Upload fotek vad selhal: ${uploadResponse.status} - ${text}`);
       }
       let result: any = {};
       try { result = JSON.parse(text); } catch { result = { files: [] }; }
-      console.log('[ApiService] Defect photos upload OK:', result);
       return { success: true, files: result.files || [] };
     } catch (error: any) {
       console.error('[ApiService] Upload defect photos error:', error);
@@ -923,7 +890,6 @@ class ApiService {
    */
   async deletePhoto(purchaseId: string, filename: string): Promise<void> {
     try {
-      console.log(`[ApiService] Mažu fotku ${filename} z nákupu ID: ${purchaseId}`);
 
       const response = await fetch(
         `${API_BASE_URL}/purchases/${purchaseId}/photos/${filename}`,
@@ -937,7 +903,6 @@ class ApiService {
         throw new Error(`Smazání fotky selhalo: ${response.status}`);
       }
 
-      console.log('[ApiService] Fotka smazána');
     } catch (error: any) {
       console.error('[ApiService] Delete photo error:', error);
       throw error;
@@ -950,24 +915,15 @@ export const apiService: any = {
   async createPurchase(payload: Record<string, any>): Promise<any> {
     const service = new ApiService();
     const sanitized = service['sanitizeForApi'](payload);
-    console.log('[ApiService] createPurchase - Input payload:', JSON.stringify(payload, null, 2));
-    console.log('[ApiService] createPurchase - Sanitized payload:', JSON.stringify(sanitized, null, 2));
-    console.log('[ApiService] createPurchase - SPECIFIC FIELDS:');
-    console.log('  - offeredPrice:', payload.offeredPrice, '→ sanitized offered_price:', sanitized.offered_price);
-    console.log('  - inspectionTime:', payload.inspectionTime, '→ sanitized inspection_time:', sanitized.inspection_time);
-    console.log('  - carDetails.firstRegistration:', payload.carDetails?.firstRegistration, '→ sanitized:', sanitized.carDetails?.firstRegistration);
     const res = await fetch(`${API_BASE_URL}/purchases`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(sanitized),
     });
     const text = await res.text();
-    console.log('[ApiService] createPurchase - Response status:', res.status);
-    console.log('[ApiService] createPurchase - Response text:', text);
     if (!res.ok) throw new Error(text);
     try { 
       const parsed = JSON.parse(text);
-      console.log('[ApiService] createPurchase - Parsed response:', JSON.stringify(parsed, null, 2));
       return parsed;
     } catch { 
       return { id: null, raw: text }; 
@@ -1059,7 +1015,6 @@ export const apiService: any = {
   },
   async listUsers() {
     const token = await AsyncStorage.getItem('jwtToken');
-    console.log('[ApiService] listUsers token:', token ? 'set' : 'null');
     const res = await fetch(`${API_BASE_URL}/users/list`, {
       method: 'GET',
       headers: {
@@ -1067,7 +1022,6 @@ export const apiService: any = {
         'Authorization': token ? `Bearer ${token}` : '',
       },
     });
-    console.log('[ApiService] listUsers status:', res.status);
     if (!res.ok) {
       const text = await res.text();
       console.error('[ApiService] listUsers error:', text);
@@ -1076,7 +1030,6 @@ export const apiService: any = {
     return res.json();
   },
   async syncUser(userId: string, firstName: string, lastName: string) {
-    console.log('[ApiService] Synchronizuji uživatele:', { userId, firstName, lastName });
     const res = await fetch(`${API_BASE_URL}/users/sync`, {
       method: 'POST',
       headers: {
@@ -1088,7 +1041,6 @@ export const apiService: any = {
         lastName,
       }),
     });
-    console.log('[ApiService] syncUser status:', res.status);
     if (!res.ok) {
       const text = await res.text();
       console.error('[ApiService] syncUser error:', text);
@@ -1098,7 +1050,6 @@ export const apiService: any = {
   },
   async getStats() {
     const token = await AsyncStorage.getItem('jwtToken');
-    console.log('[ApiService] getStats token:', token ? 'set' : 'null');
     const res = await fetch(`${API_BASE_URL}/purchases/stats`, {
       method: 'GET',
       headers: {
@@ -1106,7 +1057,6 @@ export const apiService: any = {
         'Authorization': token ? `Bearer ${token}` : '',
       },
     });
-    console.log('[ApiService] getStats status:', res.status);
     if (!res.ok) {
       const text = await res.text();
       console.error('[ApiService] getStats error:', text);
@@ -1116,7 +1066,6 @@ export const apiService: any = {
   },
   async getStatsAll() {
     const token = await AsyncStorage.getItem('jwtToken');
-    console.log('[ApiService] getStatsAll token:', token ? 'set' : 'null');
     const res = await fetch(`${API_BASE_URL}/purchases/stats/all`, {
       method: 'GET',
       headers: {
@@ -1124,7 +1073,6 @@ export const apiService: any = {
         'Authorization': token ? `Bearer ${token}` : '',
       },
     });
-    console.log('[ApiService] getStatsAll status:', res.status);
     if (!res.ok) {
       const text = await res.text();
       console.error('[ApiService] getStatsAll error:', text);
@@ -1142,5 +1090,35 @@ export const apiService: any = {
   },
   async deletePhoto(purchaseId: string, filename: string) {
     return new ApiService().deletePhoto(purchaseId, filename);
+  },
+
+  // Generic POST method for other endpoints
+  async post(endpoint: string, payload: any): Promise<any> {
+    try {
+      const url = `${API_BASE_URL}${endpoint}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(`POST ${endpoint} failed: ${response.status} - ${text}`);
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { success: true, raw: text };
+      }
+    } catch (error: any) {
+      console.error('[ApiService] POST error:', error);
+      throw error;
+    }
   },
 };

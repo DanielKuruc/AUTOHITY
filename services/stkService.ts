@@ -58,13 +58,6 @@ export const checkStkValidity = (stkString: string): StkStatus => {
   // Jednoduché porovnání: STK je platné pokud stkDate >= today
   const isValid = stkDate.getTime() >= today.getTime();
 
-  console.log('[STK Check]', {
-    input: stkString,
-    today: today.toLocaleDateString('cs-CZ'),
-    stkDate: stkDate.toLocaleDateString('cs-CZ'),
-    isValid,
-  });
-
   return {
     isValid,
     daysRemaining: 0,

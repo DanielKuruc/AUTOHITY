@@ -20,42 +20,35 @@ const getApiKey = (): string => {
   // Try expo-constants extra first (with EXPO_PUBLIC_ prefix)
   const expoExtraPublic = Constants.expoConfig?.extra?.EXPO_PUBLIC_VEHICLE_DATA_API_KEY;
   if (expoExtraPublic) {
-    console.log('[VehicleDataAPI] Klíč nalezen v expoConfig.extra.EXPO_PUBLIC_VEHICLE_DATA_API_KEY');
     return expoExtraPublic;
   }
 
   // Try without prefix
   const expoExtra = Constants.expoConfig?.extra?.VEHICLE_DATA_API_KEY;
   if (expoExtra) {
-    console.log('[VehicleDataAPI] Klíč nalezen v expoConfig.extra.VEHICLE_DATA_API_KEY');
     return expoExtra;
   }
 
   // Try manifest extra (older expo versions)
   const manifestExtraPublic = (Constants.manifest as any)?.extra?.EXPO_PUBLIC_VEHICLE_DATA_API_KEY;
   if (manifestExtraPublic) {
-    console.log('[VehicleDataAPI] Klíč nalezen v manifest.extra.EXPO_PUBLIC_VEHICLE_DATA_API_KEY');
     return manifestExtraPublic;
   }
   const manifestExtra = (Constants.manifest as any)?.extra?.VEHICLE_DATA_API_KEY;
   if (manifestExtra) {
-    console.log('[VehicleDataAPI] Klíč nalezen v manifest.extra.VEHICLE_DATA_API_KEY');
     return manifestExtra;
   }
 
   // Try environment variables
   if (typeof process !== 'undefined' && process.env) {
     if (process.env.EXPO_PUBLIC_VEHICLE_DATA_API_KEY) {
-      console.log('[VehicleDataAPI] Klíč nalezen v process.env.EXPO_PUBLIC_VEHICLE_DATA_API_KEY');
       return process.env.EXPO_PUBLIC_VEHICLE_DATA_API_KEY;
     }
     if (process.env.VEHICLE_DATA_API_KEY) {
-      console.log('[VehicleDataAPI] Klíč nalezen v process.env.VEHICLE_DATA_API_KEY');
       return process.env.VEHICLE_DATA_API_KEY;
     }
   }
 
-  console.log('[VehicleDataAPI] API klíč nenalezen v žádném zdroji');
   return '';
 };
 
@@ -106,7 +99,6 @@ interface ApiResponse {
  */
 export const hasApiKey = (): boolean => {
   const key = getApiKey();
-  console.log('[VehicleDataAPI] Kontrola API klíče, délka:', key.length);
   return key.length > 0;
 };
 
@@ -117,7 +109,6 @@ export const hasApiKey = (): boolean => {
 export const fetchVehicleData = async (params: VehicleSearchParams): Promise<VehicleDataResponse> => {
   const API_KEY = getApiKey();
   if (!API_KEY) {
-    console.error('[VehicleDataAPI] API klíč není nastaven');
     throw new Error('API klíč není nastaven. Kontaktujte administrátora.');
   }
 
@@ -133,7 +124,6 @@ export const fetchVehicleData = async (params: VehicleSearchParams): Promise<Veh
 
   const url = `${API_BASE_URL}?${queryParams.toString()}`;
 
-  console.log('[VehicleDataAPI] Načítám data z:', url);
 
   try {
     const response = await fetch(url, {
@@ -146,12 +136,10 @@ export const fetchVehicleData = async (params: VehicleSearchParams): Promise<Veh
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[VehicleDataAPI] Chyba API:', response.status, errorText);
       throw new Error(`API chyba: ${response.status} - ${errorText}`);
     }
 
     const apiResponse: ApiResponse = await response.json();
-    console.log('[VehicleDataAPI] Přijata odpověď:', apiResponse);
 
     // Zpracování status kódu
     if (apiResponse.Status === 3 || !apiResponse.Data) {
@@ -167,7 +155,6 @@ export const fetchVehicleData = async (params: VehicleSearchParams): Promise<Veh
       ...mapApiResponseToVehicleData(apiResponse.Data),
     };
   } catch (error: any) {
-    console.error('[VehicleDataAPI] Chyba při načítání:', error);
 
     // Detekce specifických chyb
     if (error.message === 'Load failed' || error.message === 'Network request failed') {
@@ -213,13 +200,6 @@ export const fetchVehicleDataByORV = async (orv: string): Promise<VehicleDataRes
 const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> => {
   if (!data) return {};
 
-  console.log('[VehicleDataAPI] Mapuji data:', JSON.stringify(data, null, 2));
-  // Logujeme všechna pole pro debugging STK
-  console.log('[VehicleDataAPI] Všechna pole z API:', Object.keys(data));
-  console.log('[VehicleDataAPI] Pole obsahující STK nebo platnost:', 
-    Object.keys(data).filter(k => k.toLowerCase().includes('stk') || k.toLowerCase().includes('platnost') || k.toLowerCase().includes('tk'))
-  );
-
   // Parsování roku z datumu první registrace
   let rokVyroby: number | undefined;
   if (data.DatumPrvniRegistrace) {
@@ -242,7 +222,6 @@ const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> =>
     if (data[fieldName] !== undefined && data[fieldName] !== null && data[fieldName] !== '') {
       stkRawValue = data[fieldName];
       foundFieldName = fieldName;
-      console.log(`[VehicleDataAPI] STK nalezeno v poli "${fieldName}":`, stkRawValue);
       break;
     }
   }
@@ -254,7 +233,6 @@ const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> =>
           data[key] !== undefined && data[key] !== null && data[key] !== '') {
         stkRawValue = data[key];
         foundFieldName = key;
-        console.log(`[VehicleDataAPI] STK nalezeno dynamicky v poli "${key}":`, stkRawValue);
         break;
       }
     }
@@ -264,23 +242,19 @@ const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> =>
     const date = new Date(stkRawValue);
     if (!isNaN(date.getTime()) && date.getFullYear() > 1900) {
       stk = date.toLocaleDateString('cs-CZ');
-      console.log('[VehicleDataAPI] STK parsováno jako datum:', stk);
     } else if (typeof stkRawValue === 'string') {
       // Pokud už je to string ve formátu dd.mm.yyyy, použijeme přímo
       if (stkRawValue.match(/^\d{1,2}\.\d{1,2}\.\d{4}$/)) {
         stk = stkRawValue;
-        console.log('[VehicleDataAPI] STK použito přímo:', stk);
       } else if (stkRawValue.match(/^\d{4}-\d{2}-\d{2}/)) {
         // Formát ISO yyyy-mm-dd nebo yyyy-mm-ddThh:mm:ss
         const parts = stkRawValue.split('T')[0].split('-');
         if (parts.length === 3) {
           stk = `${parts[2]}.${parts[1]}.${parts[0]}`;
-          console.log('[VehicleDataAPI] STK konvertováno z ISO:', stk);
         }
       }
     }
   } else {
-    console.log('[VehicleDataAPI] STK pole nenalezeno. Dostupná pole:', Object.keys(data));
   }
 
   // Parsování výkonu z formátu "75 / 5500" (kW / otáčky)
@@ -355,7 +329,6 @@ const mapApiResponseToVehicleData = (data: any): Partial<VehicleDataResponse> =>
   let pohon: string | undefined;
   if (data.NapravyPocetDruh) {
     const napravyStr = data.NapravyPocetDruh.toString().trim();
-    console.log('[VehicleDataAPI] NapravyPocetDruh:', napravyStr);
 
     const upperStr = napravyStr.toUpperCase();
 
