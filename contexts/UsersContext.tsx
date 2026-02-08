@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { apiService } from '@/services/apiService';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 export interface User {
   id: string;
@@ -30,7 +30,6 @@ export const UsersProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setIsLoading(true);
       setError(null);
       const result = await apiService.listUsers();
-      console.log('[UsersContext] API response:', result);
       if (result.success && result.data) {
         // Parse API response - API vrací: { users: [...] }
         const apiUsers = result.data.users || result.data;
@@ -46,7 +45,6 @@ export const UsersProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           };
         }) : [];
         setUsers(parsedUsers);
-        console.log('[UsersContext] Uživatelé načteni:', parsedUsers.length, parsedUsers);
       } else {
         throw new Error(result.error || 'Chyba při načítání uživatelů');
       }

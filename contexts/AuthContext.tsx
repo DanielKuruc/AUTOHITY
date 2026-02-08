@@ -51,7 +51,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Inicializace - načti session z úložiště - POUZE JEDNOU při startu
   useEffect(() => {
     let isMounted = true;
-    console.log('[Auth] Initializing auth system');
     const init = async () => {
       try {
         const stored = await AsyncStorage.getItem(STORAGE_KEY);
@@ -59,7 +58,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (stored) {
           try {
             const { user: storedUser, token: storedToken } = JSON.parse(stored);
-            console.log('[Auth] ✅ Session found in storage for user:', storedUser?.userName);
             setUser(storedUser);
             setJwtToken(storedToken);
             setIsAuthenticated(true);
@@ -68,11 +66,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await AsyncStorage.removeItem(STORAGE_KEY);
           }
         } else {
-          console.log('[Auth] ℹ️ No session in storage - user must login');
         }
         // VŽDY nastav isLoading na false když je init hotový
         setIsLoading(false);
-        console.log('[Auth] ✅ Initialization complete');
       } catch (err) {
         console.error('[Auth] ❌ Initialization error:', err);
         if (isMounted) {
@@ -88,7 +84,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (userName: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      console.log('[Auth] Login attempt:', userName);
       const loginResponse = await authApiService.login(userName, password);
 
       const userData: User = {
@@ -124,13 +119,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           userData.firstName || '',
           userData.lastName || ''
         );
-        console.log('[Auth] User synced to DB:', syncResult);
       } catch (syncError) {
         console.error('[Auth] Failed to sync user to DB:', syncError);
         // Nepretrhávej login - sync selhání není kritické
       }
 
-      console.log('[Auth] Login successful');
       return { success: true };
     } catch (error: any) {
       console.error('[Auth] Login error:', error.message);
@@ -140,7 +133,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      console.log('[Auth] Logout - clearing session');
       // Postupně resetuj aby se nevrátilo do loading stavu
       await AsyncStorage.removeItem(STORAGE_KEY);
       await authApiService.logout();
@@ -151,7 +143,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserStats(null);
       setAllStats(null);
       // isLoading zůstane false - nechceme se vrátit na loading screen
-      console.log('[Auth] Logout complete');
     } catch (err) {
       console.error('[Auth] Logout error:', err);
       // I při erroru resetuj auth state
@@ -163,13 +154,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadUserProfile = async () => {
     if (!jwtToken) {
-      console.log('[Auth] Cannot load profile - no JWT token');
       return;
     }
     try {
-      console.log('[Auth] Loading profile');
       const profileData = await authApiService.getProfile(jwtToken);
-      console.log('[Auth] Profile API response:', profileData);
       setUser(prev => {
         const updated = prev
           ? {
@@ -179,7 +167,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               phoneNumber: profileData.phoneNumber,
             }
           : null;
-        console.log('[Auth] User state after profile update:', updated);
         return updated;
       });
     } catch (err) {
@@ -190,14 +177,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadUserStats = async () => {
     if (!user?.id) {
-      console.log('[Auth] Cannot load stats - no user ID');
       return;
     }
 
     try {
-      console.log('[Auth] Loading personal stats for user:', user.id);
       const url = `https://autohity.cz/php-api/purchases/stats?userId=${user.id}`;
-      console.log('[Auth] Calling stats endpoint:', url);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -206,7 +190,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      console.log('[Auth] Stats response status:', response.status);
       if (!response.ok) {
         const errorText = await response.text();
         console.error('[Auth] Stats response error text:', errorText);
@@ -214,9 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const data = await response.json();
-      console.log('[Auth] Stats raw response:', JSON.stringify(data, null, 2));
       if (data.success && data.data) {
-        console.log('[Auth] ✅ Personal stats loaded:', data.data);
         setUserStats({
           total: data.data.total || 0,
           new: data.data.new || 0,
@@ -248,9 +229,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadAllStats = async () => {
     try {
-      console.log('[Auth] Loading company-wide stats');
       const url = 'https://autohity.cz/php-api/purchases/stats/all';
-      console.log('[Auth] Calling all stats endpoint:', url);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -259,7 +238,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      console.log('[Auth] All stats response status:', response.status);
       if (!response.ok) {
         const errorText = await response.text();
         console.error('[Auth] All stats response error text:', errorText);
@@ -267,9 +245,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const data = await response.json();
-      console.log('[Auth] All stats raw response:', JSON.stringify(data, null, 2));
       if (data.success && data.data) {
-        console.log('[Auth] ✅ Company stats loaded:', data.data);
         setAllStats({
           total: data.data.total || 0,
           new: data.data.new || 0,
@@ -301,7 +277,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const changePassword = async (oldPassword: string, newPassword: string): Promise<boolean> => {
     try {
-      console.log('[Auth] Changing password');
       // TODO: Implement password change when API endpoint is available
       console.warn('[Auth] Password change not yet implemented');
       return false;

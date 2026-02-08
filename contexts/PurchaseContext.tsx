@@ -106,11 +106,9 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     const timer = setTimeout(() => {
       apiService.getPurchases()
         .then((apiPurchases: any) => {
-          console.log('[PurchaseContext] Synced from API on startup:', apiPurchases.length);
           setPurchases(apiPurchases);
         })
-        .catch((error: any) => {
-          console.error('[PurchaseContext] Chyba při synchronizaci na startu:', error);
+        .catch(() => {
           // Bez fallback - ukaž prázdný seznam
           setPurchases([]);
         });
@@ -124,7 +122,6 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     // Employee filter - show only current user's purchases
     if (filter.employeePurchasesOnly && user?.id) {
       if (purchase.employeeId !== user.id) {
-        console.log('[Filter] Skipping purchase', purchase.id, '- employeeId:', purchase.employeeId, '!== currentUserId:', user.id);
         return false;
       }
     }
@@ -170,12 +167,12 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
-    // Employee filter - filtruj podle employeeId
+    // Employee filter
     if (filter.employeeId && purchase.employeeId !== filter.employeeId) {
       return false;
     }
 
-    // Service notes filter - show only completed purchases with service notes
+    // Service notes filter
     if (filter.serviceNotesOnly) {
       if (purchase.purchaseState !== PurchaseState.COMPLETED) {
         return false;
@@ -194,8 +191,8 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
       if (savedFilter) {
         setFilterState(JSON.parse(savedFilter));
       }
-    } catch (error) {
-      console.log('Chyba při načítání uloženého filtru:', error);
+    } catch {
+      // Silent fail
     }
   };
 
@@ -203,8 +200,8 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     setFilterState(newFilter);
     try {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newFilter));
-    } catch (error) {
-      console.log('Chyba při ukládání filtru:', error);
+    } catch {
+      // Silent fail
     }
   };
 
@@ -213,21 +210,17 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     setFilterState(clearedFilter);
     try {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(clearedFilter));
-    } catch (error) {
-      console.log('Chyba při mazání filtru:', error);
+    } catch {
+      // Silent fail
     }
   };
 
   const refreshPurchases = async () => {
     setRefreshing(true);
     try {
-      // Načítat data z API
       const apiPurchases = await apiService.getPurchases();
-      console.log('[PurchaseContext] Načteno z API:', apiPurchases.length);
       setPurchases(apiPurchases);
-    } catch (error) {
-      console.error('[PurchaseContext] Chyba při načítání z API:', error);
-      // Bez fallback - ukaž prázdný seznam
+    } catch {
       setPurchases([]);
     }
     setRefreshing(false);
@@ -235,8 +228,6 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
 
   const addPurchase = (purchase: Purchase) => {
     setPurchases(prev => [purchase, ...prev]);
-    // Already synced to API during creation in new-purchase/index.tsx
-    console.log('[PurchaseContext] Výkup přidán, již synchronizován s API');
   };
 
   const setInitDataFn = (data: InitialPurchaseData) => {
@@ -254,7 +245,6 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
   const clearAutomobilDataFn = () => {
     setAutomobilData(undefined);
   };
-  // Pending upload functions
   const addPendingUpload = (purchase: Purchase): string => {
     const localId = `pending_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const pending: PendingUpload = {
@@ -264,7 +254,6 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
       progress: 0,
     };
     setPendingUploads(prev => [pending, ...prev]);
-    console.log('[PurchaseContext] Added pending upload:', localId);
     return localId;
   };
 
@@ -278,10 +267,8 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     setPendingUploads(prev =>
       prev.map(u => u.id === id ? { ...u, status: 'success', progress: 100 } : u)
     );
-    // Reset notes after successful upload
     setGeneralNotes('');
     setServiceNotes('');
-    // Remove from pending after 2 seconds
     setTimeout(() => {
       setPendingUploads(prev => prev.filter(u => u.id !== id));
     }, 2000);
@@ -299,19 +286,13 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     setPendingUploads(prev =>
       prev.map(u => u.id === id ? { ...u, status: 'uploading', progress: 0, error: undefined } : u)
     );
-    // Trigger upload again
     uploadPurchaseInBackground(id, pending.purchase);
   };
 
-  // Background upload function
   const uploadPurchaseInBackground = async (localId: string, purchase: Purchase) => {
     try {
-      console.log('[PurchaseContext] Starting background upload:', localId);
       const result = await apiService.createPurchase(purchase);
-
       if (result.id) {
-        console.log('[PurchaseContext] Upload success:', result.id);
-        // Add to purchases list with server ID
         const purchaseWithId = { ...purchase, id: result.id };
         setPurchases(prev => [purchaseWithId, ...prev]);
         markUploadSuccess(localId);
@@ -319,48 +300,32 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
         markUploadError(localId, 'Server error');
       }
     } catch (error: any) {
-      console.error('[PurchaseContext] Upload failed:', error);
       markUploadError(localId, error.message || 'Upload failed');
     }
   };
 
-  // Update purchase function
   const updatePurchase = async (id: string, updates: Partial<Purchase>) => {
     try {
-      console.log('[PurchaseContext] Updating purchase on server:', id, updates);
-      // Nejdřív aktualizuj server
       await apiService.updatePurchase(id, updates);
-      console.log('[PurchaseContext] Server update success');
-      // Potom aktualizuj lokální state
       setPurchases(prev =>
         prev.map(p => p.id === id ? { ...p, ...updates } : p)
       );
-    } catch (error) {
-      console.error('[PurchaseContext] Failed to update purchase on server:', error);
-      // Ještě aktualizuj lokální state aby se UI ihned zobrazilo
+    } catch {
       setPurchases(prev =>
         prev.map(p => p.id === id ? { ...p, ...updates } : p)
       );
     }
   };
 
-  // Delete purchase function
   const deletePurchase = async (id: string) => {
     try {
-      console.log('[PurchaseContext] Deleting purchase on server:', id);
-      // Nejdřív smaž na serveru
       await apiService.deletePurchase(id);
-      console.log('[PurchaseContext] Server delete success');
-      // Potom smaž z lokálního state
       setPurchases(prev => prev.filter(p => p.id !== id));
-    } catch (error) {
-      console.error('[PurchaseContext] Failed to delete purchase on server:', error);
-      // Ještě smaž z lokálního state aby se UI ihned aktualizovalo
+    } catch {
       setPurchases(prev => prev.filter(p => p.id !== id));
     }
   };
 
-  // Get purchase by ID
   const getPurchaseById = (id: string): Purchase | undefined => {
     return purchases.find(p => p.id === id);
   };

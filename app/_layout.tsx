@@ -1,29 +1,29 @@
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
+import { NotificationToast } from '@/components/NotificationCenter';
+import { ToastContainer } from '@/components/Toast';
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { NotificationProvider, useNotifications } from '@/contexts/NotificationContext';
 import { PurchaseProvider } from '@/contexts/PurchaseContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
-import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { UsersProvider } from '@/contexts/UsersContext';
 import { ToastProvider } from '@/contexts/ToastContext';
-import { NotificationProvider, useNotifications } from '@/contexts/NotificationContext';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StyleSheet, View, ActivityIndicator } from 'react-native';
-import LoginScreen from './login';
-import * as SplashScreen from 'expo-splash-screen';
+import { UsersProvider } from '@/contexts/UsersContext';
+import { initializePushNotifications, setupNotificationListeners } from '@/services/pushNotifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
+import * as Notifications from 'expo-notifications';
+import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { ToastContainer } from '@/components/Toast';
-import { setupNotificationListeners, initializePushNotifications } from '@/services/pushNotifications';
+import { ActivityIndicator, AppState, AppStateStatus, StyleSheet, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import LoginScreen from './login';
 SplashScreen.preventAutoHideAsync();
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const { theme } = useTheme();
 
-  console.log('[AuthGate] Render:', { isAuthenticated, isLoading });
-
   if (isLoading) {
-    console.log('[AuthGate] Showing loading...');
     return (
       <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
         <ActivityIndicator size="large" color={theme.accent} />
@@ -32,67 +32,68 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }
 
   if (!isAuthenticated) {
-    console.log('[AuthGate] Not authenticated - showing LoginScreen');
     return <LoginScreen />;
   }
 
-  console.log('[AuthGate] Authenticated - showing app');
   return <>{children}</>;
 }
 
 function RootLayoutContent() {
   const { isDark } = useTheme();
   const { user } = useAuth();
-  const { addFromPushNotification } = useNotifications();
-  const [loaded, fontError] = useFonts({
+  const { addFromPushNotification, notifications } = useNotifications();
+  const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
 
-  // Hide splash screen immediately (don't wait for fonts)
+  // Hide splash screen
   useEffect(() => {
-    SplashScreen.hideAsync().catch(err => {
-      console.log('[RootLayout] Error hiding splash:', err);
+    SplashScreen.hideAsync().catch(() => {
+      // Silently fail
     });
   }, []);
 
-  // Log font loading status
+  // Clear badge when app becomes active
   useEffect(() => {
-    if (loaded) {
-      console.log('[RootLayout] Fonts loaded successfully');
-    }
-    if (fontError) {
-      console.error('[RootLayout] Font error:', fontError);
-    }
-  }, [loaded, fontError]);
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, []);
 
+  const handleAppStateChange = async (state: AppStateStatus) => {
+    if (state === 'active') {
+      // Clear badge when app is opened/comes to foreground
+      await Notifications.setBadgeCountAsync(0);
+    }
+  };
   // Initialize push notifications when user is authenticated
   useEffect(() => {
     if (user?.id) {
-      console.log('[RootLayout] Initializing push notifications for user:', user.id);
       initializePushNotifications(Number(user.id));
 
-      // Setup listeners for incoming notifications
       const cleanup = setupNotificationListeners(
         (notification) => {
-          // Notification received while app is open
           addFromPushNotification(notification);
         },
         (notification) => {
-          // User tapped on notification
           addFromPushNotification(notification);
-          
-          // Optional: Navigate to specific screen based on notification data
-          const data = notification.request.content.data;
-          if (data?.purchaseId) {
-            // Could navigate to purchase detail here if needed
-            console.log('[RootLayout] Would navigate to purchase:', data.purchaseId);
-          }
         }
       );
 
       return cleanup;
     }
   }, [user?.id, addFromPushNotification]);
+
+  // Persist notifications to AsyncStorage whenever they change
+  useEffect(() => {
+    const persistNotifications = async () => {
+      try {
+        await AsyncStorage.setItem('notifications', JSON.stringify(notifications));
+      } catch (error) {
+        // Silently fail or log error if needed
+      }
+    };
+    persistNotifications();
+  }, [notifications]);
 
   return (
     <>
@@ -123,6 +124,14 @@ function RootLayoutContent() {
         </Stack>
       </AuthGate>
       <ToastContainer />
+      {/* Display push notification toasts */}
+      {notifications.length > 0 && (
+        <View style={styles.notificationStack}>
+          {notifications.slice(0, 1).map((notif) => (
+            <NotificationToast key={notif.id} notification={notif} />
+          ))}
+        </View>
+      )}
     </>
   );
 }
@@ -155,5 +164,13 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  notificationStack: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+    pointerEvents: 'none',
   },
 });

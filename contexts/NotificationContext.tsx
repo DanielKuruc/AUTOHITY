@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
 export interface InAppNotification {
   id: string;
@@ -9,6 +10,7 @@ export interface InAppNotification {
   data?: Record<string, any>;
   timestamp: number;
   read: boolean;
+  persistent?: boolean; // Persist to storage if true
 }
 
 interface NotificationContextType {
@@ -23,8 +25,38 @@ interface NotificationContextType {
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
+const STORAGE_KEY = 'notifications_history';
+
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load persisted notifications on startup
+  useEffect(() => {
+    loadPersistedNotifications();
+  }, []);
+
+  const loadPersistedNotifications = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as InAppNotification[];
+        setNotifications(parsed);
+      }
+    } catch (error) {
+    } finally {
+      setIsLoaded(true);
+    }
+  };
+
+  const persistNotifications = async (notifs: InAppNotification[]) => {
+    try {
+      // Keep only push notifications, max 100 most recent
+      const pushNotifs = notifs.filter((n) => n.type === 'push').slice(0, 100);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(pushNotifs));
+    } catch (error) {
+    }
+  };
 
   const addNotification = useCallback(
     (notification: Omit<InAppNotification, 'id' | 'timestamp' | 'read'>): string => {
@@ -34,15 +66,25 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         id,
         timestamp: Date.now(),
         read: false,
+        persistent: notification.type === 'push', // Persist push notifications
       };
 
-      setNotifications((prev) => [newNotification, ...prev]);
+      setNotifications((prev) => {
+        const updated = [newNotification, ...prev];
+        if (newNotification.persistent) {
+          persistNotifications(updated);
+        }
+        return updated;
+      });
 
-      // Auto-remove after 5 seconds for info/success, keep error longer
-      const duration = notification.type === 'error' ? 8000 : 5000;
-      const timer = setTimeout(() => {
-        removeNotification(id);
-      }, duration);
+      // Auto-remove in-app toast after 5 seconds
+      // But keep push notifications in history
+      if (notification.type !== 'push') {
+        const duration = notification.type === 'error' ? 8000 : 5000;
+        const timer = setTimeout(() => {
+          removeNotification(id);
+        }, duration);
+      }
 
       return id;
     },
@@ -50,11 +92,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   );
 
   const removeNotification = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setNotifications((prev) => {
+      const updated = prev.filter((n) => n.id !== id);
+      persistNotifications(updated);
+      return updated;
+    });
   }, []);
 
   const clearNotifications = useCallback(() => {
     setNotifications([]);
+    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
   }, []);
 
   const markAsRead = useCallback((id: string) => {

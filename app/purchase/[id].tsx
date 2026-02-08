@@ -828,13 +828,13 @@ export default function PurchaseDetailScreen() {
         )}
 
         {/* Poznámky - vždy viditelná (read-only) */}
-        {purchase.notes && purchase.purchaseState !== PurchaseState.IN_PROGRESS && (
+        {purchase.notes && (
           <View style={[styles.section, { backgroundColor: theme.card }]}>
             <View style={styles.sectionHeader}>
               <View style={[styles.sectionIconWrapper, { backgroundColor: theme.accentLight }]}>
                 <Ionicons name="document-text" size={18} color={theme.accent} />
               </View>
-              <Text style={[styles.sectionTitle, { color: theme.text }]}>Poznámky</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Obecná poznámka</Text>
             </View>
             <View style={[styles.notesBox, { backgroundColor: theme.inputBackground }]}>
               <Text style={[styles.notesText, { color: theme.text }]}>{purchase.notes}</Text>

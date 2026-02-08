@@ -100,7 +100,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         setThemeModeState(saved as ThemeMode);
       }
     } catch (error) {
-      console.log('Chyba při načítání tématu:', error);
     }
   };
 
@@ -109,7 +108,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     try {
       await AsyncStorage.setItem(THEME_STORAGE_KEY, mode);
     } catch (error) {
-      console.log('Chyba při ukládání tématu:', error);
     }
   };
 

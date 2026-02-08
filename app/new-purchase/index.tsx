@@ -297,9 +297,7 @@ const DRAFT_STORAGE_KEY = 'new_purchase_draft';
 const saveDraftData = async (data: any) => {
   try {
     await AsyncStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(data));
-    console.log('[NewPurchase] Draft uložen do AsyncStorage');
   } catch (error) {
-    console.error('[NewPurchase] Chyba při ukládání draftu:', error);
   }
 };
 
@@ -307,11 +305,9 @@ const loadDraftData = async () => {
   try {
     const saved = await AsyncStorage.getItem(DRAFT_STORAGE_KEY);
     if (saved) {
-      console.log('[NewPurchase] Draft načten z AsyncStorage');
       return JSON.parse(saved);
     }
   } catch (error) {
-    console.error('[NewPurchase] Chyba při načítání draftu:', error);
   }
   return null;
 };
@@ -319,9 +315,7 @@ const loadDraftData = async () => {
 const clearDraftData = async () => {
   try {
     await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
-    console.log('[NewPurchase] Draft vymazán');
   } catch (error) {
-    console.error('[NewPurchase] Chyba při mazání draftu:', error);
   }
 };
 
@@ -354,89 +348,62 @@ const uploadPurchaseInBackgroundHelper = async (
   updatePurchase: any
 ): Promise<void> => {
   try {
-    console.log('🟢 [Background] START upload for pending:', pendingId);
-    console.log('🟢 [Background] offeredPrice:', payload.offeredPrice);
-    console.log('🟢 [Background] inspectionTime:', payload.inspectionTime);
-    console.log('🟢 [Background] carDetails.firstRegistration:', payload.carDetails?.firstRegistration);
 
     // 1️⃣ CREATE PURCHASE ON API
-    console.log('🟢 [Background] Calling apiService.createPurchase()...');
     const createResult = await apiService.createPurchase(payload);
-    console.log('🟢 [Background] CREATE RESULT:', JSON.stringify(createResult, null, 2));
 
     const serverId = String(createResult?.id || createResult?.data?.id);
     if (!serverId || serverId === 'null') {
       throw new Error('API vrátilo neplatné ID: ' + JSON.stringify(createResult));
     }
 
-    console.log('✅ [Background] Purchase created with ID:', serverId);
 
     // WAIT FOR DB COMMIT - Small delay to ensure createPurchase transaction is fully committed
-    console.log('⏳ [Background] Waiting for DB commit (500ms)...');
     await new Promise(resolve => setTimeout(resolve, 500));
 
     // 2️⃣ UPLOAD COVER PHOTO FIRST if exists
     let uploadedCoverUri: string | undefined;
     if (coverPhotoUri) {
       try {
-        console.log('🟢 [Background] Uploading cover photo...');
         const coverResult = await apiService.uploadPhotos(serverId, [coverPhotoUri]);
         if (coverResult?.files && coverResult.files.length > 0) {
           uploadedCoverUri = coverResult.files[0];
-          console.log('✅ [Background] Cover photo uploaded:', uploadedCoverUri);
         }
       } catch (e) {
-        console.warn('[Background] Cover photo upload skipped:', e);
       }
     }
 
     // 3️⃣ UPLOAD VEHICLE PHOTOS
     if (vehicleImages.length > 0) {
       try {
-        console.log('🟢 [Background] Uploading', vehicleImages.length, 'vehicle photos...');
         const vehResult = await apiService.uploadPhotos(serverId, vehicleImages);
-        console.log('✅ [Background] Vehicle photos uploaded:', vehResult?.files?.length);
         updatePurchaseProgress(pendingId, 50);
       } catch (e) {
-        console.error('[Background] Vehicle photos failed:', e);
       }
     }
 
     // 4️⃣ UPLOAD DEFECT PHOTOS
     if (defectImages.length > 0) {
       try {
-        console.log('🟢 [Background] Uploading', defectImages.length, 'defect photos...');
         const defResult = await apiService.uploadDefectPhotos(serverId, defectImages);
-        console.log('✅ [Background] Defect photos uploaded:', defResult?.files?.length);
         updatePurchaseProgress(pendingId, 75);
       } catch (e) {
-        console.error('[Background] Defect photos failed:', e);
       }
     }
 
     // 5️⃣ UPDATE COVER PHOTO URI IN DB (if was uploaded)
     if (uploadedCoverUri) {
       try {
-        console.log('🟢 [Background] Saving cover photo URI to DB...');
         // Only update coverPhotoUri field - don't touch other fields!
         const coverUpdatePayload = { coverPhotoUri: uploadedCoverUri };
         await apiService.updatePurchase(serverId, coverUpdatePayload);
-        console.log('✅ [Background] Cover photo URI saved');
       } catch (e) {
-        console.warn('[Background] Failed to save cover photo URI:', e);
       }
     }
 
     // 6️⃣ RELOAD & UPDATE CONTEXT with latest data from DB
-    console.log('🟢 [Background] Fetching purchase from API to verify...');
     const savedPurchase = await apiService.getPurchaseById(serverId);
-    console.log('🟢 [Background] SAVED PURCHASE FROM DB:');
-    console.log('  - offeredPrice:', savedPurchase.offeredPrice);
-    console.log('  - inspectionTime:', savedPurchase.inspectionTime);
-    console.log('  - inspectionDate:', savedPurchase.inspectionDate);
-    console.log('  - phone:', savedPurchase.phone);
     if (savedPurchase.carDetails) {
-      console.log('  - firstRegistration:', savedPurchase.carDetails.firstRegistration);
     }
 
     // 7️⃣ UPDATE CONTEXT so UI shows latest data
@@ -444,19 +411,10 @@ const uploadPurchaseInBackgroundHelper = async (
       // savedPurchase je ALREADY transformován z getPurchaseById
       // Jen updatuj všechna pole aby si UI sebralo latest data
       updatePurchase(serverId, savedPurchase);
-      console.log('✅ [Background] Context updated with:', { 
-        id: serverId, 
-        offeredPrice: savedPurchase.offeredPrice,
-        inspectionTime: savedPurchase.inspectionTime,
-        inspectionDate: savedPurchase.inspectionDate,
-        phone: savedPurchase.phone
-      });
     }
 
     markUploadSuccess(pendingId);
-    console.log('✅ [Background] UPLOAD COMPLETE:', serverId);
   } catch (error: any) {
-    console.error('🔴 [Background] UPLOAD FAILED:', error?.message || error);
     markUploadError(pendingId, error?.message || 'Chyba při nahrávání');
   }
 };
@@ -579,17 +537,13 @@ export default function NewPurchaseScreen() {
 
   // Initialize form from initData in context on mount
   useEffect(() => {
-    console.log('[NewPurchase] INIT useEffect - checking initData:', initData);
 
     const hasInitData = initData?.vin || initData?.firstName || initData?.companyName || initData?.vehicleData;
     if (!hasInitData) {
-      console.log('[NewPurchase] No initData detected → starting with a clean form and clearing any stale draft');
       // Important: Do NOT load draft automatically here to avoid persisting old test values
-      clearDraftData().catch(err => console.warn('[NewPurchase] Failed to clear draft (non-critical):', err));
       return;
     }
 
-    console.log('[NewPurchase] ========== APPLYING INITDATA ==========');
 
     // Set basic client info
     if (initData.firstName || initData.lastName || initData.companyName) {
@@ -718,7 +672,6 @@ export default function NewPurchaseScreen() {
     setVinLoading(true);
     try {
       const vehicleData = await fetchVehicleDataByVin(souhrnData.vin);
-      console.log('[VIN Lookup] Načtená data:', JSON.stringify(vehicleData, null, 2));
 
       // Normalize brand and model using helper functions
       const normalizedZnacka = normalizeZnacka(vehicleData.znacka || '');
@@ -735,7 +688,6 @@ export default function NewPurchaseScreen() {
       // Process STK date - ensure correct format dd.mm.yyyy
       let stkValue = vehicleData.stk;
       if (stkValue) {
-        console.log('[VIN Lookup] STK z API:', stkValue);
         // STK by mělo být ve formátu dd.mm.yyyy - ověříme
         if (!stkValue.match(/^\d{1,2}\.\d{1,2}\.\d{4}$/)) {
           // Zkusíme parsovat a přeformátovat
@@ -744,13 +696,11 @@ export default function NewPurchaseScreen() {
             stkValue = stkDate.toLocaleDateString('cs-CZ');
           }
         }
-        console.log('[VIN Lookup] STK po zpracování:', stkValue);
       }
 
       // Process doProvozu date
       let doProvozuValue = vehicleData.datumPrvniRegistrace;
       if (doProvozuValue) {
-        console.log('[VIN Lookup] Do provozu z API:', doProvozuValue);
       }
 
       // Aktualizovat data automobilu z API
@@ -768,7 +718,6 @@ export default function NewPurchaseScreen() {
           pocetVlastniku: vehicleData.pocetVlastniku?.toString() || prev.pocetVlastniku,
           pocetProvozovatelu: vehicleData.pocetProvozovatelu?.toString() || prev.pocetProvozovatelu,
         };
-        console.log('[VIN Lookup] Aktualizovaná automobilData:', updated);
         // Uložit do contextu
         setContextAutomobilData(updated);
         return updated;
@@ -797,7 +746,6 @@ export default function NewPurchaseScreen() {
         [{ text: 'OK' }]
       );
     } catch (error: any) {
-      console.error('[VIN Lookup] Chyba:', error);
       Alert.alert(
         'Chyba',
         error.message || 'Nepodařilo se načíst data o vozidle',
@@ -817,7 +765,6 @@ export default function NewPurchaseScreen() {
     setIcoLoading(true);
     try {
       const companyData = await fetchCompanyByIco(zakladniData.ico);
-      console.log('[IČO Lookup] Načtená data:', companyData);
       if (companyData && companyData.success) {
         // Aktualizovat všechna pole včetně adresy a platceDPH
         setZakladniData(prev => {
@@ -829,7 +776,6 @@ export default function NewPurchaseScreen() {
             psc: companyData.psc?.replace(/\s/g, '') || prev.psc, // Odstranit mezery z PSČ
             platceDPH: companyData.platceDPH || prev.platceDPH,
           };
-          console.log('[IČO Lookup] Aktualizovaná data:', updated);
           return updated;
         });
         // Sestavit zprávu s načtenými údaji
@@ -847,7 +793,6 @@ export default function NewPurchaseScreen() {
         Alert.alert('Chyba', 'Firma s tímto IČO nebyla nalezena');
       }
     } catch (error: any) {
-      console.error('[IČO Lookup] Chyba:', error);
       Alert.alert('Chyba', error.message || 'Nepodařilo se načíst data firmy');
     } finally {
       setIcoLoading(false);
@@ -907,36 +852,25 @@ export default function NewPurchaseScreen() {
     setConfirmVisible(false);
     setLoading(true);
     try {
-      console.log('🔵 [performSave] START');
-      console.log('🔵 [performSave] zakladniData:', JSON.stringify(zakladniData, null, 2));
-      console.log('🔵 [performSave] zakladniData.datumProhlidky BEFORE extraction:', zakladniData.datumProhlidky);
-      console.log('🔵 [performSave] zakladniData.datumProhlidky type:', typeof zakladniData.datumProhlidky);
-      console.log('🔵 [performSave] zakladniData.datumProhlidky length:', zakladniData.datumProhlidky?.length);
 
       // EXTRACT INSPECTION DATE & TIME from datumProhlidky (format: "dd.mm.yyyy hh:mm")
       let inspectionDate: string | undefined = undefined;
       let inspectionTime: string | undefined = undefined;
 
       if (zakladniData.datumProhlidky) {
-        console.log('🔵 Extracting from datumProhlidky:', zakladniData.datumProhlidky);
         // Format: "29.01.2026 14:30" nebo jen "29.01.2026"
         const parts = zakladniData.datumProhlidky.trim().split(' ');
         if (parts.length >= 1) {
           inspectionDate = parts[0]; // "29.01.2026"
-          console.log('  → inspectionDate:', inspectionDate);
         }
         if (parts.length >= 2 && parts[1]) {
           inspectionTime = parts[1]; // "14:30"
-          console.log('  → inspectionTime from datumProhlidky:', inspectionTime);
         } else {
           // Default čas pokud není v datumProhlidky - defaultujeme na 09:00
           inspectionTime = '09:00';
-          console.log('  → inspectionTime defaultní:', inspectionTime);
         }
       }
 
-      console.log('✓ Final Inspection date:', inspectionDate);
-      console.log('✓ Final Inspection time:', inspectionTime);
 
       // BUILD PURCHASE PAYLOAD
       const payload: Record<string, any> = {
@@ -1014,29 +948,20 @@ export default function NewPurchaseScreen() {
         })),
       };
 
-      console.log('🔵 [performSave] PAYLOAD TO API:');
-      console.log('  - cenaNabidnuta:', zakladniData.cenaNabidnuta);
-      console.log('  - offeredPrice in payload:', payload.offeredPrice);
-      console.log('  - inspectionTime:', payload.inspectionTime);
-      console.log('  - firstRegistration:', payload.carDetails.firstRegistration);
-      console.log('FULL PAYLOAD:', JSON.stringify(payload, null, 2));
       const pendingId = addPendingUpload(payload as any);
-      console.log('🔵 [performSave] Added to pending:', pendingId);
       await clearDraftData();
       setLoading(false);
       router.back();
 
-      uploadPurchaseInBackground(
+      await uploadPurchaseInBackground(
         pendingId,
         payload as any,
         vehicleImages,
         defectImages,
         interiorImages,
-        coverPhotoUri
-      ).catch(err => console.error('[performSave] Background upload error:', err));
-
+        coverPhotoUri,
+      );
     } catch (error: any) {
-      console.error('🔴 [performSave] ERROR:', error);
       Alert.alert('Chyba', error.message || 'Nepodařilo se uložit výkup');
       setLoading(false);
     }
@@ -1052,85 +977,59 @@ export default function NewPurchaseScreen() {
     coverPhotoUri?: string | null
   ): Promise<void> => {
     try {
-      console.log('🟢 [Background] START upload for pending:', pendingId);
-      console.log('🟢 [Background] offeredPrice:', payload.offeredPrice);
-      console.log('🟢 [Background] inspectionTime:', payload.inspectionTime);
-      console.log('🟢 [Background] carDetails.firstRegistration:', payload.carDetails?.firstRegistration);
 
       // 1️⃣ CREATE PURCHASE ON API
-      console.log('🟢 [Background] Calling apiService.createPurchase()...');
       const createResult = await (apiService as any).createPurchase(payload as Record<string, any>);
-      console.log('🟢 [Background] CREATE RESULT:', JSON.stringify(createResult, null, 2));
 
       const serverId = String(createResult?.id || createResult?.data?.id);
       if (!serverId || serverId === 'null') {
         throw new Error('API vrátilo neplatné ID: ' + JSON.stringify(createResult));
       }
 
-      console.log('✅ [Background] Purchase created with ID:', serverId);
 
       // 2️⃣ UPLOAD COVER PHOTO FIRST if exists
       let uploadedCoverUri: string | undefined;
       if (coverPhotoUri) {
         try {
-          console.log('🟢 [Background] Uploading cover photo...');
           const coverResult = await apiService.uploadPhotos(serverId, [coverPhotoUri]);
           if (coverResult?.files && coverResult.files.length > 0) {
             uploadedCoverUri = coverResult.files[0];
-            console.log('✅ [Background] Cover photo uploaded:', uploadedCoverUri);
           }
         } catch (e) {
-          console.warn('[Background] Cover photo upload skipped:', e);
         }
       }
 
       // 3️⃣ UPLOAD VEHICLE PHOTOS
       if (vehicleImages.length > 0) {
         try {
-          console.log('🟢 [Background] Uploading', vehicleImages.length, 'vehicle photos...');
           const vehResult = await apiService.uploadPhotos(serverId, vehicleImages);
-          console.log('✅ [Background] Vehicle photos uploaded:', vehResult?.files?.length);
           updatePurchaseProgress(pendingId, 50);
         } catch (e) {
-          console.error('[Background] Vehicle photos failed:', e);
         }
       }
 
       // 4️⃣ UPLOAD DEFECT PHOTOS
       if (defectImages.length > 0) {
         try {
-          console.log('🟢 [Background] Uploading', defectImages.length, 'defect photos...');
           const defResult = await apiService.uploadDefectPhotos(serverId, defectImages);
-          console.log('✅ [Background] Defect photos uploaded:', defResult?.files?.length);
           updatePurchaseProgress(pendingId, 75);
         } catch (e) {
-          console.error('[Background] Defect photos failed:', e);
         }
       }
 
       // 5️⃣ UPDATE COVER PHOTO URI IN DB (if was uploaded)
       if (uploadedCoverUri) {
         try {
-          console.log('🟢 [Background] Saving cover photo URI to DB...');
           // Only update coverPhotoUri field - don't touch other fields!
           const coverUpdatePayload = { coverPhotoUri: uploadedCoverUri };
           await apiService.updatePurchase(serverId, coverUpdatePayload);
-          console.log('✅ [Background] Cover photo URI saved');
         } catch (e) {
-          console.warn('[Background] Failed to save cover photo URI:', e);
         }
       }
 
       // 6️⃣ RELOAD & UPDATE CONTEXT with latest data from DB
-      console.log('🟢 [Background] Fetching purchase from API to verify...');
       const savedPurchase = await apiService.getPurchaseById(serverId);
-      console.log('🟢 [Background] SAVED PURCHASE FROM DB:');
-      console.log('  - offeredPrice:', savedPurchase.offeredPrice);
-      console.log('  - inspectionTime:', savedPurchase.inspectionTime);
-      console.log('  - inspectionDate:', savedPurchase.inspectionDate);
-      console.log('  - phone:', savedPurchase.phone);
       if (savedPurchase.carDetails) {
-        console.log('  - firstRegistration:', savedPurchase.carDetails.firstRegistration);
       }
       
       // 7️⃣ UPDATE CONTEXT so UI shows latest data
@@ -1138,19 +1037,10 @@ export default function NewPurchaseScreen() {
         // savedPurchase je ALREADY transformován z getPurchaseById
         // Jen updatuj všechna pole aby si UI sebralo latest data
         updatePurchase(serverId, savedPurchase);
-        console.log('✅ [Background] Context updated with:', { 
-          id: serverId, 
-          offeredPrice: savedPurchase.offeredPrice,
-          inspectionTime: savedPurchase.inspectionTime,
-          inspectionDate: savedPurchase.inspectionDate,
-          phone: savedPurchase.phone
-        });
       }
       
       markUploadSuccess(pendingId);
-      console.log('✅ [Background] UPLOAD COMPLETE:', serverId);
     } catch (error: any) {
-      console.error('🔴 [Background] UPLOAD FAILED:', error?.message || error);
       markUploadError(pendingId, error?.message || 'Chyba při nahrávání');
     }
   };
@@ -1822,7 +1712,6 @@ export default function NewPurchaseScreen() {
           setVehicleImages(prev => [...prev, result.assets[0].uri]);
         }
       } catch (e) {
-        console.error('Camera error:', e);
       }
     };
 
@@ -1838,7 +1727,6 @@ export default function NewPurchaseScreen() {
           setVehicleImages(prev => [...prev, ...result.assets.map(a => a.uri)]);
         }
       } catch (e) {
-        console.error('Gallery error:', e);
       }
     };
 
@@ -1852,7 +1740,6 @@ export default function NewPurchaseScreen() {
           setDefectImages(prev => [...prev, result.assets[0].uri]);
         }
       } catch (e) {
-        console.error('Camera error:', e);
       }
     };
 
@@ -1868,7 +1755,6 @@ export default function NewPurchaseScreen() {
           setDefectImages(prev => [...prev, ...result.assets.map(a => a.uri)]);
         }
       } catch (e) {
-        console.error('Gallery error:', e);
       }
     };
 
