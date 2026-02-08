@@ -77,9 +77,11 @@ class PurchaseAPI {
                 $payload['user_id'] = $userId;
             }
 
+            $url = API_BASE_URL . '/send_push.php';
+
             $ch = curl_init();
             curl_setopt_array($ch, [
-                CURLOPT_URL => getenv('API_BASE_URL') . '/send_push.php',
+                CURLOPT_URL => $url,
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => json_encode($payload),
@@ -91,11 +93,8 @@ class PurchaseAPI {
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
 
-            if ($httpCode !== 200) {
-                error_log("Push notification failed: HTTP $httpCode");
-            }
         } catch (Exception $e) {
-            error_log("Send push notification error: " . $e->getMessage());
+            // Silent fail on push notifications
         }
     }
 
@@ -203,22 +202,29 @@ class PurchaseAPI {
                 ':cover_photo_index' => $data['coverPhotoIndex'] ?? $data['cover_photo_index'] ?? 0,
                 ':cover_photo_uri' => $data['coverPhotoUri'] ?? $data['cover_photo_uri'] ?? null,
             ];
-            
-            // DEBUG LOGGING
-            error_log('[CREATE PURCHASE] inspection_date param: ' . ($params[':inspection_date'] ?? 'NULL'));
-            error_log('[CREATE PURCHASE] inspection_time param: ' . ($params[':inspection_time'] ?? 'NULL'));
-            error_log('[CREATE PURCHASE] phone param: ' . ($params[':phone'] ?? 'EMPTY'));
-            
             $stmt->execute($params);
 
             $purchaseId = $this->db->lastInsertId();
 
             // Send push notification - all users notified about new purchase
+            // Build text from vehicle details (like hero card in detail)
+            $notifText = '🚗 Nový výkup';
+            $vehicleInfo = [];
+            if (!empty($data['carDetails'])) {
+                $v = $data['carDetails'];
+                if (!empty($v['make'])) $vehicleInfo[] = $v['make'];
+                if (!empty($v['model'])) $vehicleInfo[] = $v['model'];
+                if (!empty($v['fuelType'])) $vehicleInfo[] = $v['fuelType'];
+                if (!empty($v['year'])) $vehicleInfo[] = $v['year'];
+            }
+            if (!empty($vehicleInfo)) {
+                $notifText = implode(' • ', $vehicleInfo);
+            }
             $this->sendPushNotification(
                 '🚗 Nový výkup',
-                'Byl vytvořen nový výkup - ' . ($data['spz'] ?? 'neznámá SPZ'),
+                $notifText,
                 null, // send to all users
-                ['type' => 'new_purchase', 'purchaseId' => $purchaseId, 'spz' => $data['spz'] ?? null]
+                ['type' => 'new_purchase', 'purchaseId' => $purchaseId]
             );
 
             // Optional nested inserts
@@ -286,8 +292,6 @@ class PurchaseAPI {
                 'message' => 'Purchase created successfully',
             ];
         } catch (Exception $e) {
-            error_log('Create purchase error: ' . $e->getMessage());
-            error_log('Payload: ' . json_encode($data));
             throw $e;
         }
     }
@@ -423,7 +427,6 @@ class PurchaseAPI {
                 'count' => count($purchases),
             ];
         } catch (Exception $e) {
-            error_log('Get purchases error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -515,7 +518,6 @@ class PurchaseAPI {
 
             return [ 'success' => true, 'data' => $row ];
         } catch (Exception $e) {
-            error_log('Get purchase error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -525,8 +527,15 @@ class PurchaseAPI {
      */
     public function update($id, $data) {
         try {
-            // Ověř, že nákup existuje
-            $this->getById($id);
+            // Get OLD state BEFORE any update (for notification logic)
+            $getOld = $this->db->prepare("SELECT purchase_state, spz FROM purchases WHERE id = :id");
+            $getOld->execute([':id' => $id]);
+            $oldRow = $getOld->fetch();
+            if (!$oldRow) {
+                throw new Exception('Purchase not found');
+            }
+            $oldState = $oldRow['purchase_state'];
+            $oldSpz = $oldRow['spz'];
 
             $data = $this->sanitize($data);
 
@@ -619,7 +628,6 @@ class PurchaseAPI {
                     // IMPORTANT: Never allow partial UPDATE to set NOT NULL columns to NULL or empty
                     // Skip empty values for these fields to preserve existing data during partial updates
                     if (($col === 'phone' || $col === 'inspection_date' || $col === 'inspection_time') && empty($data[$key])) {
-                        error_log('[UPDATE] Skipping ' . $col . ' field because it would be empty');
                         continue;
                     }
                     $updates[] = "$col = :$col";
@@ -646,11 +654,10 @@ class PurchaseAPI {
             $stmt->execute($params);
 
             // Send push notification if purchase state changed
-            if (isset($data['purchaseState'])) {
-                $oldPurchase = $this->getById($id);
-                $oldState = $oldPurchase['data']['purchase_state'] ?? null;
+            if (isset($data['purchaseState']) && $oldState) {
                 $newState = $data['purchaseState'];
 
+                // Only notify if state actually changed
                 if ($oldState !== $newState) {
                     $stateLabels = [
                         'NEW' => 'Nový',
@@ -658,14 +665,29 @@ class PurchaseAPI {
                         'COMPLETED' => 'Vykoupeno',
                         'CANCELLED' => 'Odmítnuto',
                     ];
-                    $title = '📝 Změna stavu výkupu';
-                    $body = ($data['spz'] ?? 'Výkup') . ' - ' . ($stateLabels[$newState] ?? $newState);
+                    $title = '📝 ' . ($stateLabels[$newState] ?? $newState);
                     
+                    // Get vehicle details from DB to show in notification (like hero card)
+                    $getVehicle = $this->db->prepare("SELECT v.make, v.model, v.fuel_type, v.engine_size, v.year FROM vehicles v WHERE v.purchase_id = :pid LIMIT 1");
+                    $getVehicle->execute([':pid' => $id]);
+                    $vehicle = $getVehicle->fetch();
+                    
+                    $vehicleInfo = [];
+                    if ($vehicle) {
+                        if (!empty($vehicle['make'])) $vehicleInfo[] = $vehicle['make'];
+                        if (!empty($vehicle['model'])) $vehicleInfo[] = $vehicle['model'];
+                        if (!empty($vehicle['fuel_type'])) $vehicleInfo[] = $vehicle['fuel_type'];
+                        if (!empty($vehicle['year'])) $vehicleInfo[] = $vehicle['year'];
+                    }
+                    
+                    $body = !empty($vehicleInfo) ? implode(' • ', $vehicleInfo) : 'Výkup';
+
+                    // Send to ALL users
                     $this->sendPushNotification(
                         $title,
                         $body,
-                        $data['employeeId'] ?? null, // send to specific employee if available
-                        ['type' => 'purchase_state_change', 'purchaseId' => $id, 'newState' => $newState, 'spz' => $data['spz'] ?? null]
+                        null, // send to ALL users
+                        ['type' => 'purchase_state_change', 'purchaseId' => $id, 'oldState' => $oldState, 'newState' => $newState]
                     );
                 }
             }
@@ -732,8 +754,6 @@ class PurchaseAPI {
                 'message' => 'Purchase updated successfully',
             ];
         } catch (Exception $e) {
-            error_log('Update purchase error: ' . $e->getMessage());
-            error_log('Payload: ' . json_encode($data));
             throw $e;
         }
     }
@@ -754,7 +774,6 @@ class PurchaseAPI {
                 'message' => 'Purchase deleted successfully',
             ];
         } catch (Exception $e) {
-            error_log('Delete purchase error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -803,7 +822,6 @@ class PurchaseAPI {
                 'message' => count($result['files']) . ' photos uploaded',
             ];
         } catch (Exception $e) {
-            error_log('Upload photos error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -842,7 +860,6 @@ class PurchaseAPI {
             $stmt->execute([':id' => $id, ':photos' => json_encode($all)]);
             return [ 'success' => true, 'files' => $result['files'] ];
         } catch (Exception $e) {
-            error_log('Upload defect photos error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -878,7 +895,6 @@ class PurchaseAPI {
                 'message' => 'Photo deleted successfully',
             ];
         } catch (Exception $e) {
-            error_log('Delete photo error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -915,7 +931,6 @@ class PurchaseAPI {
                     FileUpload::deleteFile($filename);
                 } catch (Exception $e) {
                     // Pokračuj dál, loguj chybu
-                    error_log('Delete file failed: ' . $filename . ' - ' . $e->getMessage());
                 }
             }
 
@@ -925,7 +940,6 @@ class PurchaseAPI {
 
             return [ 'success' => true ];
         } catch (Exception $e) {
-            error_log('Delete purchase error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -959,7 +973,6 @@ class PurchaseAPI {
                 ]
             ];
         } catch (Exception $e) {
-            error_log('Get personal statistics error: ' . $e->getMessage());
             throw $e;
         }
     }
@@ -992,7 +1005,6 @@ class PurchaseAPI {
                 ]
             ];
         } catch (Exception $e) {
-            error_log('Get company statistics error: ' . $e->getMessage());
             throw $e;
         }
     }

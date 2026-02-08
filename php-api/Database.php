@@ -1,6 +1,8 @@
 <?php
 // Database.php - MySQL connection class
 
+require_once __DIR__ . '/config.php';
+
 class Database {
     private $pdo;
     private static $instance = null;
@@ -17,7 +19,6 @@ class Database {
                 ]
             );
         } catch (PDOException $e) {
-            error_log('Database connection error: ' . $e->getMessage());
             throw new Exception('Database connection failed');
         }
     }
@@ -39,7 +40,6 @@ class Database {
             $stmt->execute($params);
             return $stmt;
         } catch (PDOException $e) {
-            error_log('Database execute error: ' . $e->getMessage());
             throw new Exception('Database operation failed');
         }
     }

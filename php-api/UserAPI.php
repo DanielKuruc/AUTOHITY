@@ -49,9 +49,7 @@ class UserAPI {
                 // INSERT - new employee
                 $sql = "INSERT INTO employees (id, first_name, last_name, synced_at)
                         VALUES (:id, :first_name, :last_name, NOW())";
-                error_log('[syncUser] INSERT SQL: ' . $sql);
                 $stmt = $this->db->prepare($sql);
-                error_log('[syncUser] Executing with data: ' . json_encode([':id' => $userId, ':first_name' => $firstName, ':last_name' => $lastName]));
                 $stmt->execute([
                     ':id' => $userId,
                     ':first_name' => $firstName,

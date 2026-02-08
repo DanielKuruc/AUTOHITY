@@ -41,3 +41,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 if (!is_dir(__DIR__ . '/logs')) {
     mkdir(__DIR__ . '/logs', 0755, true);
 }
+
+// API Base URL for internal cURL calls (push notifications, webhooks, etc.)
+define('API_BASE_URL', 'https://autohity.cz/php-api');

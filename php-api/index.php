@@ -43,10 +43,6 @@ try {
         $path = '/purchases';
     }
     // Debug logging
-    error_log("REQUEST_URI: {$_SERVER['REQUEST_URI']}");
-    error_log("Parsed path: {$originalPath}");
-    error_log("After replace: {$path}");
-    error_log("Method: {$method}");
     // Parse query string
     parse_str(parse_url($_SERVER['REQUEST_URI'], PHP_URL_QUERY) ?? '', $query);
 
@@ -110,7 +106,6 @@ try {
         echo json_encode(['error' => 'Not found']);
     }
 } catch (Exception $e) {
-    error_log('API error: ' . $e->getMessage());
     http_response_code(500);
     echo json_encode(['error' => 'Server error', 'message' => $e->getMessage()]);
 }
@@ -148,7 +143,6 @@ function handleLogin() {
             return;
         }
 
-        error_log('Login success: user=' . print_r($user, true));
 
         $token = Auth::generateToken($user['id'], $user['email']);
 
@@ -162,7 +156,6 @@ function handleLogin() {
             ],
         ]);
     } catch (Exception $e) {
-        error_log('Login error: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'Login failed']);
     }
@@ -339,7 +332,6 @@ function handleSeed() {
             ':password' => $passwordHash,
         ]);
 
-        error_log('Seed: New user created, ID=' . $userId);
 
         http_response_code(200);
         echo json_encode([
@@ -351,7 +343,6 @@ function handleSeed() {
             'timestamp' => time(),
         ]);
     } catch (Exception $e) {
-        error_log('Seed error: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode([
             'success' => false,
@@ -497,7 +488,6 @@ function handleListUsersApi() {
  */
 function handleSyncUser() {
     $input = json_decode(file_get_contents('php://input'), true);
-    error_log('[handleSyncUser] Input received: ' . json_encode($input));
     if (empty($input)) {
         http_response_code(400);
         echo json_encode(['error' => 'User data required']);
@@ -505,15 +495,11 @@ function handleSyncUser() {
     }
     try {
         $db = Database::getInstance()->getConnection();
-        error_log('[handleSyncUser] DB connection OK');
         $api = new UserAPI($db);
-        error_log('[handleSyncUser] UserAPI instantiated');
         $result = $api->syncUser($input);
-        error_log('[handleSyncUser] Result: ' . json_encode($result));
         http_response_code(200);
         echo json_encode($result);
     } catch (Exception $e) {
-        error_log('[handleSyncUser] Exception: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => $e->getMessage()]);
     }
@@ -535,7 +521,6 @@ function handleGetStats() {
         }
 
         $userId = $query['userId'];
-        error_log('[Stats] Loading stats for userId: ' . $userId);
         $api = new PurchaseAPI();
         $result = $api->getPersonalStatistics($userId);
         http_response_code(200);
@@ -552,7 +537,6 @@ function handleGetStats() {
  */
 function handleGetStatsAll() {
     try {
-        error_log('[Stats] Loading company-wide stats');
         $api = new PurchaseAPI();
         $result = $api->getCompanyStatistics();
         http_response_code(200);

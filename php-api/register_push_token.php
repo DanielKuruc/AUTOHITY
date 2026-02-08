@@ -22,6 +22,12 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 try {
     $input = json_decode(file_get_contents('php://input'), true);
 
+    if (!is_array($input)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid JSON input']);
+        exit;
+    }
+
     if (empty($input['user_id']) || empty($input['expo_token'])) {
         http_response_code(400);
         echo json_encode(['error' => 'user_id and expo_token are required']);
@@ -31,33 +37,38 @@ try {
     $user_id = (int)$input['user_id'];
     $expo_token = trim($input['expo_token']);
 
-    // Validate token format (basic check)
-    if (!preg_match('/^ExponentPushToken\[.+\]$/', $expo_token)) {
+    if ($user_id <= 0) {
         http_response_code(400);
-        echo json_encode(['error' => 'Invalid Expo token format']);
+        echo json_encode(['error' => 'user_id must be a positive number']);
         exit;
     }
 
-    $db = new Database();
+    if (!preg_match('/^(Exponent|Expo)PushToken\[.+\]$/', $expo_token)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid Expo token format. Expected ExponentPushToken[...] or ExpoPushToken[...]']);
+        exit;
+    }
 
-    // Insert or ignore if already exists (UNIQUE KEY on user_id, expo_token)
+    $db = Database::getInstance();
+
     $sql = "INSERT INTO push_tokens (user_id, expo_token, created_at) 
             VALUES (?, ?, NOW())
             ON DUPLICATE KEY UPDATE created_at = NOW()";
 
-    $stmt = $db->prepare($sql);
-    $stmt->bind_param('is', $user_id, $expo_token);
-    $stmt->execute();
+    $stmt = $db->execute($sql, [$user_id, $expo_token]);
 
     http_response_code(200);
     echo json_encode([
         'success' => true,
         'message' => 'Token registered successfully',
         'user_id' => $user_id,
-        'token' => substr($expo_token, 0, 20) . '...' // Don't return full token
+        'token' => substr($expo_token, 0, 20) . '...'
     ]);
 
-} catch (Exception $e) {
+} catch (Throwable $e) {
     http_response_code(500);
-    echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+    echo json_encode([
+        'error' => 'Server error: ' . $e->getMessage(),
+        'exception' => get_class($e)
+    ]);
 }
