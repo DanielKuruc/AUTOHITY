@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Dimensions,
   Image,
   Platform,
@@ -12,6 +11,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
+import { showAlert } from '@/utils/alert';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -27,7 +27,7 @@ export function CameraCapture({ images, onAddImage, onAddImages, onRemoveImage }
   const handleCameraPress = async () => {
     // On web, camera permission is handled differently
     if (Platform.OS === 'web') {
-      Alert.alert(
+      showAlert(
         'Kamera není dostupná',
         'Funkce kamery není dostupná na webu. Použijte prosím "Vybrat z galerie".',
         [{ text: 'OK' }]
@@ -37,7 +37,7 @@ export function CameraCapture({ images, onAddImage, onAddImages, onRemoveImage }
 
     const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
     if (!permissionResult.granted) {
-      Alert.alert('Oprávnění vyžadováno', 'Pro fotografování je potřeba přístup ke kameře');
+      showAlert('Oprávnění vyžadováno', 'Pro fotografování je potřeba přístup ke kameře');
       return;
     }
 
@@ -57,7 +57,7 @@ export function CameraCapture({ images, onAddImage, onAddImages, onRemoveImage }
   const handleLibraryPress = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
-      Alert.alert('Oprávnění vyžadováno', 'Pro výběr fotek je potřeba přístup ke galerii');
+      showAlert('Oprávnění vyžadováno', 'Pro výběr fotek je potřeba přístup ke galerii');
       return;
     }
 
@@ -77,7 +77,7 @@ export function CameraCapture({ images, onAddImage, onAddImages, onRemoveImage }
   const handleMultipleLibraryPress = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) {
-      Alert.alert('Oprávnění vyžadováno', 'Pro výběr fotek je potřeba přístup ke galerii');
+      showAlert('Oprávnění vyžadováno', 'Pro výběr fotek je potřeba přístup ke galerii');
       return;
     }
 
@@ -90,7 +90,6 @@ export function CameraCapture({ images, onAddImage, onAddImages, onRemoveImage }
 
     if (!result.canceled && result.assets.length > 0) {
       const uris = result.assets.map(asset => asset.uri);
-      console.log(`[CameraCapture] Vybráno ${uris.length} fotek`);
 
       if (onAddImages) {
         onAddImages(uris);

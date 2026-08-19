@@ -66,7 +66,6 @@ export function ImageGallery({ images, visible, initialIndex, onClose }: ImageGa
           contentFit="contain"
           transition={150}
           cachePolicy="memory-disk"
-          onError={(e: any) => console.warn('[ImageGallery] Web image error:', item, e)}
         />
       ) : (
         <ZoomableImage uri={item} />

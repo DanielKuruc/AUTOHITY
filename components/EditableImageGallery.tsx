@@ -8,12 +8,12 @@ import {
   TouchableOpacity,
   FlatList,
   Dimensions,
-  Alert,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { showAlert } from '@/utils/alert';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -48,7 +48,7 @@ export function EditableImageGallery({
   const handleDeleteImage = (index: number) => {
     if (!isEditing) return;
 
-    Alert.alert(
+    showAlert(
       'Smazat fotografii',
       'Opravdu chcete smazat tuto fotografii?',
       [
@@ -72,7 +72,7 @@ export function EditableImageGallery({
   const handleDeleteSelected = () => {
     if (selectedIndices.length === 0) return;
 
-    Alert.alert(
+    showAlert(
       'Smazat fotografie',
       `Opravdu chcete smazat ${selectedIndices.length} fotografií?`,
       [

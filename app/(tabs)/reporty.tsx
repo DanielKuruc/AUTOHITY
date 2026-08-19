@@ -1,15 +1,17 @@
-import { DatePickerField } from '@/components/DatePickerField';
-import { SidebarUserSection } from '@/components/SidebarUserSection';
-import { PurchaseState } from '@/constants/types';
-import { usePurchases } from '@/contexts/PurchaseContext';
-import { useTheme } from '@/contexts/ThemeContext';
-import { useTabletLayout } from '@/hooks/useTabletLayout';
-import { sharePurchasesList } from '@/services/exportService';
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import { DatePickerField } from "@/components/DatePickerField";
+import { ScreenHeader } from "@/components/ScreenHeader";
+import { SidebarBrand } from "@/components/SidebarBrand";
+import { SidebarUserSection } from "@/components/SidebarUserSection";
+import { useTheme } from "@/contexts/ThemeContext";
+import { useUsers } from "@/contexts/UsersContext";
+import { useTabletLayout } from "@/hooks/useTabletLayout";
+import { shareCompleteReport } from "@/services/exportService";
+import { reportsService } from "@/services/reportsService";
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import React, { useCallback, useEffect, useState } from "react";
 import {
-  Alert,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -18,230 +20,189 @@ import {
   Text,
   TouchableOpacity,
   View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { showAlert } from '@/utils/alert';
 
-type ReportPeriod = 'week' | 'month' | 'quarter' | 'custom';
+type ReportPeriod = "week" | "month" | "year" | "custom";
 
 export default function ReportyScreen() {
   const { theme } = useTheme();
-  const { purchases } = usePurchases();
+  const { users } = useUsers();
   const { isSplitView } = useTabletLayout();
-  const [selectedPeriod, setSelectedPeriod] = useState<ReportPeriod>('month');
+  const [selectedPeriod, setSelectedPeriod] = useState<ReportPeriod>("month");
   const [showCustomModal, setShowCustomModal] = useState(false);
-  const [customStartDate, setCustomStartDate] = useState('');
-  const [customEndDate, setCustomEndDate] = useState('');
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [reportData, setReportData] = useState<any>(null);
+  const [showAllMakes, setShowAllMakes] = useState(false);
 
-  const parseCustomDate = (dateString: string): Date | null => {
-    if (!dateString) return null;
-    // Format: dd.mm.yyyy
-    const parts = dateString.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
-    if (!parts) return null;
-    const [, day, month, year] = parts;
-    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+  // Map period to API timeFilter
+  const getTimeFilter = useCallback(() => {
+    if (selectedPeriod === "week") return "WEEK";
+    if (selectedPeriod === "month") return "MONTH";
+    if (selectedPeriod === "year") return "YEAR";
+    if (selectedPeriod === "custom") return "CUSTOM";
+    return "ALL";
+  }, [selectedPeriod]);
+
+  // Convert date format from dd.mm.yyyy to YYYY-MM-DD
+  const formatDateForAPI = (dateString: string): string => {
+    if (!dateString) return "";
+    const parts = dateString.split(".");
+    if (parts.length === 3) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    return dateString;
   };
 
-  // Helper function to parse date from Czech format or ISO format
-  const parseDateString = (dateString: string | null | undefined): Date | null => {
-    if (!dateString || typeof dateString !== 'string') return null;
-    const trimmed = dateString.trim();
-    if (!trimmed) return null;
-    // Try Czech format first (dd.mm.yyyy)
-    const czechDate = parseCustomDate(trimmed);
-    if (czechDate && !isNaN(czechDate.getTime())) {
-      return czechDate;
-    }
-    // Fallback to ISO format
-    const isoDate = new Date(trimmed);
-    if (!isNaN(isoDate.getTime())) {
-      return isoDate;
-    }
-    return null;
-  };
+  // Load report data from API
+  const loadReportData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const timeFilter = getTimeFilter();
+      let fromDate, toDate;
 
-  const reportData = useMemo(() => {
-    const now = new Date();
-    let startDate: Date;
-    let endDate: Date = now;
-    let periodLabel: string;
-
-    switch (selectedPeriod) {
-      case 'week':
-        startDate = new Date(now);
-        startDate.setDate(now.getDate() - 7);
-        periodLabel = 'Týdenní report';
-        break;
-      case 'month':
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        periodLabel = 'Měsíční report';
-        break;
-      case 'quarter':
-        const quarter = Math.floor(now.getMonth() / 3);
-        startDate = new Date(now.getFullYear(), quarter * 3, 1);
-        periodLabel = 'Čtvrtletní report';
-        break;
-      case 'custom':
-        const parsedStart = parseCustomDate(customStartDate);
-        const parsedEnd = parseCustomDate(customEndDate);
-        startDate = parsedStart || new Date(now.getFullYear(), now.getMonth(), 1);
-        endDate = parsedEnd || now;
-        periodLabel = 'Vlastní report';
-        break;
-      default:
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        periodLabel = 'Měsíční report';
-    }
-
-    const periodPurchases = purchases.filter(p => {
-      // Use createdAt if available, fallback to purchaseDate
-      const dateString = String(p.createdAt || p.purchaseDate || '');
-      if (!dateString.trim()) return false;
-      const purchaseDate = parseDateString(dateString);
-      if (!purchaseDate) return false;
-      return purchaseDate >= startDate && purchaseDate <= endDate;
-    });
-
-    const byState = {
-      new: periodPurchases.filter(p => p.purchaseState === PurchaseState.NEW).length,
-      inProgress: periodPurchases.filter(p => p.purchaseState === PurchaseState.IN_PROGRESS).length,
-      completed: periodPurchases.filter(p => p.purchaseState === PurchaseState.COMPLETED).length,
-      cancelled: periodPurchases.filter(p => p.purchaseState === PurchaseState.CANCELLED).length,
-    };
-
-    // Debug logging
-    console.log('[Reporty] Total purchases:', purchases.length);
-    console.log('[Reporty] Period:', selectedPeriod, 'startDate:', startDate, 'endDate:', endDate);
-    console.log('[Reporty] Filtered periodPurchases:', periodPurchases.length);
-    if (purchases.length > 0) {
-      console.log('[Reporty] First purchase createdAt:', purchases[0].createdAt);
-      const parsed = parseDateString(purchases[0].createdAt || '');
-      console.log('[Reporty] Parsed first date:', parsed);
-    }
-    console.log('[Reporty] byState:', byState);
-
-    // Debug totalAmount
-    console.log('[Reporty] Checking totalAmount in periodPurchases:');
-    periodPurchases.forEach((p, idx) => {
-      console.log(`  [${idx}] Purchase ${p.id}: totalAmount=${p.totalAmount}, customerPrice=${p.customerPrice}, offeredPrice=${p.offeredPrice}`);
-    });
-    const totalValue = periodPurchases.reduce((sum, p) => {
-      let amount = 0;
-      if (typeof p.totalAmount === 'number') {
-        amount = p.totalAmount;
-      } else if (typeof p.totalAmount === 'string' && p.totalAmount) {
-        const parsed = parseFloat((p.totalAmount as string).replace(',', '.'));
-        amount = isNaN(parsed) ? 0 : parsed;
+      if (selectedPeriod === "custom") {
+        if (customStartDate) fromDate = formatDateForAPI(customStartDate);
+        if (customEndDate) toDate = formatDateForAPI(customEndDate);
       }
-      return sum + amount;
-    }, 0);
-    const completedValue = periodPurchases
-      .filter(p => p.purchaseState === PurchaseState.COMPLETED)
-      .reduce((sum, p) => {
-        let amount = 0;
-        if (typeof p.totalAmount === 'number') {
-          amount = p.totalAmount;
-        } else if (typeof p.totalAmount === 'string' && p.totalAmount) {
-          const parsed = parseFloat((p.totalAmount as string).replace(',', '.'));
-          amount = isNaN(parsed) ? 0 : parsed;
-        }
-        return sum + amount;
-      }, 0);
 
-    // Výkupy podle značky
-    const byMake: Record<string, number> = {};
-    periodPurchases.forEach(p => {
-      const make = p.carDetails?.make || 'Neznámá';
-      byMake[make] = (byMake[make] || 0) + 1;
-    });
+      const data = await reportsService.getReportData(
+        timeFilter,
+        undefined,
+        false,
+        fromDate,
+        toDate,
+      );
 
-    const topMakes = Object.entries(byMake)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
+      // Transform API response
+      const now = new Date();
+      let startDate: Date;
+      let periodLabel: string;
 
-    return {
-      periodLabel,
-      startDate: startDate.toLocaleDateString('cs-CZ'),
-      endDate: endDate.toLocaleDateString('cs-CZ'),
-      total: periodPurchases.length,
-      byState,
-      totalValue,
-      completedValue,
-      avgValue: periodPurchases.length > 0 ? totalValue / periodPurchases.length : 0,
-      successRate: periodPurchases.length > 0 
-        ? (byState.completed / periodPurchases.length) * 100 
-        : 0,
-      topMakes,
-    };
-  }, [purchases, selectedPeriod, customStartDate, customEndDate]);
+      switch (selectedPeriod) {
+        case "week":
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 7);
+          periodLabel = "Týdenní report";
+          break;
+        case "month":
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          periodLabel = "Měsíční report";
+          break;
+        case "year":
+          startDate = new Date(now.getFullYear(), 0, 1);
+          periodLabel = "Roční report";
+          break;
+        case "custom":
+          startDate = fromDate
+            ? new Date(fromDate)
+            : new Date(now.getFullYear(), now.getMonth(), 1);
+          periodLabel = "Vlastní report";
+          break;
+        default:
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          periodLabel = "Měsíční report";
+      }
+
+      const purchases = data.purchases || [];
+      const endDate = now;
+
+      // Calculate stats by state
+      const byState = {
+        new: purchases.filter((p: any) => p.purchase_state === "NEW").length,
+        inProgress: purchases.filter(
+          (p: any) => p.purchase_state === "IN_PROGRESS",
+        ).length,
+        completed: purchases.filter(
+          (p: any) => p.purchase_state === "COMPLETED",
+        ).length,
+        cancelled: purchases.filter(
+          (p: any) => p.purchase_state === "CANCELLED",
+        ).length,
+      };
+
+      // Calculate totals - convert to numbers since API returns strings
+      const totalValue = purchases.reduce(
+        (sum: number, p: any) => sum + (Number(p.total_amount) || 0),
+        0,
+      );
+      const completedValue = purchases
+        .filter((p: any) => p.purchase_state === "COMPLETED")
+        .reduce(
+          (sum: number, p: any) => sum + (Number(p.total_amount) || 0),
+          0,
+        );
+
+      // Use topMakes directly from API - include both total and completed
+      const topMakes = (data.topMakes || []).map((item: any) => ({
+        make: item.make || "Neznámá",
+        total: Number(item.count) || 0,
+        completed: Number(item.completed) || 0,
+      }));
+
+      // Use topEmployees directly from API
+      const topEmployees = data.topEmployees || [];
+
+      setReportData({
+        periodLabel,
+        startDate: startDate.toLocaleDateString("cs-CZ"),
+        endDate: endDate.toLocaleDateString("cs-CZ"),
+        total: purchases.length,
+        byState,
+        totalValue,
+        completedValue,
+        avgValue: purchases.length > 0 ? totalValue / purchases.length : 0,
+        successRate:
+          purchases.length > 0
+            ? (byState.completed / purchases.length) * 100
+            : 0,
+        topMakes,
+        topEmployees,
+        topSuppliers: data.topSuppliers || [],
+        purchases,
+      });
+    } catch (error) {
+      showAlert("Chyba", "Nepodařilo se načíst report data");
+      setReportData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedPeriod, customStartDate, customEndDate, getTimeFilter]);
+
+  useEffect(() => {
+    loadReportData();
+  }, [loadReportData]);
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('cs-CZ', {
-      style: 'currency',
-      currency: 'CZK',
+    return new Intl.NumberFormat("cs-CZ", {
+      style: "currency",
+      currency: "CZK",
       maximumFractionDigits: 0,
     }).format(amount);
   };
 
   const handleExport = async () => {
+    if (!reportData) {
+      showAlert("Info", "Žádná data k exportu za vybrané období");
+      return;
+    }
     try {
-      const now = new Date();
-      let startDate: Date = new Date(now);
-      let periodName = 'Report';
-      switch (selectedPeriod) {
-        case 'week':
-          startDate = new Date(now);
-          startDate.setDate(now.getDate() - 7);
-          periodName = 'Týdenní report';
-          break;
-        case 'month':
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          periodName = 'Měsíční report';
-          break;
-        case 'quarter':
-          const quarter = Math.floor(now.getMonth() / 3);
-          startDate = new Date(now.getFullYear(), quarter * 3, 1);
-          periodName = 'Čtvrtletní report';
-          break;
-      }
-
-      const periodPurchases = purchases.filter(p => {
-        // Use createdAt if available, fallback to purchaseDate
-        const dateValue = p.createdAt || p.purchaseDate || '';
-        const dateString = String(dateValue).trim();
-        if (!dateString) return false;
-        const purchaseDate = parseDateString(dateString);
-        if (!purchaseDate) return false;
-        return purchaseDate >= startDate;
-      });
-
-      if (periodPurchases.length === 0) {
-        Alert.alert('Info', 'Žádné výkupy k exportu za vybrané období');
-        return;
-      }
-
-      await sharePurchasesList(periodPurchases, periodName);
+      const periodName = reportData.periodLabel;
+      await shareCompleteReport(reportData, periodName);
     } catch (error) {
-      console.error('[Reporty] Chyba při exportu:', error);
-      Alert.alert('Chyba', 'Nepodařilo se exportovat report');
+      showAlert("Chyba", "Nepodařilo se exportovat report");
     }
   };
 
   const handleApplyCustomDates = () => {
     if (!customStartDate || !customEndDate) {
-      Alert.alert('Chyba', 'Prosím vyberte obě data');
+      showAlert("Chyba", "Prosím vyberte obě data");
       return;
     }
-    const startDate = parseCustomDate(customStartDate);
-    const endDate = parseCustomDate(customEndDate);
-    if (!startDate || !endDate) {
-      Alert.alert('Chyba', 'Neplatný formát datumu (dd.mm.yyyy)');
-      return;
-    }
-    if (startDate > endDate) {
-      Alert.alert('Chyba', 'Počáteční datum musí být před koncovým datem');
-      return;
-    }
-    setSelectedPeriod('custom');
+    setSelectedPeriod("custom");
     setShowCustomModal(false);
   };
 
@@ -249,12 +210,13 @@ export default function ReportyScreen() {
     <TouchableOpacity
       style={[
         styles.periodButton,
-        { 
-          backgroundColor: selectedPeriod === period ? theme.accent : theme.inputBackground,
-        }
+        {
+          backgroundColor:
+            selectedPeriod === period ? theme.accent : theme.inputBackground,
+        },
       ]}
       onPress={() => {
-        if (period === 'custom') {
+        if (period === "custom") {
           setShowCustomModal(true);
         } else {
           setSelectedPeriod(period);
@@ -264,7 +226,7 @@ export default function ReportyScreen() {
       <Text
         style={[
           styles.periodButtonText,
-          { color: selectedPeriod === period ? '#FFFFFF' : theme.text }
+          { color: selectedPeriod === period ? "#FFFFFF" : theme.text },
         ]}
       >
         {label}
@@ -276,64 +238,100 @@ export default function ReportyScreen() {
     label: string,
     value: string | number,
     icon: string,
-    color: string
+    color: string,
   ) => (
     <View style={[styles.metricCard, { backgroundColor: theme.card }]}>
-      <View style={[styles.metricIcon, { backgroundColor: color + '20' }]}>
+      <View style={[styles.metricIcon, { backgroundColor: color + "20" }]}>
         <Ionicons name={icon as any} size={20} color={color} />
       </View>
       <Text style={[styles.metricValue, { color: theme.text }]}>{value}</Text>
-      <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>{label}</Text>
+      <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>
+        {label}
+      </Text>
     </View>
   );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView
+      edges={['top', 'left', 'right']}
+      style={[styles.container, { backgroundColor: theme.background }]}
+    >
       <View style={[isSplitView ? styles.splitLayout : styles.stackedLayout]}>
         {/* LEFT SIDEBAR - TABLET ONLY */}
         {isSplitView && (
-          <View style={[styles.sidebar, { backgroundColor: theme.surface, borderRightColor: theme.border }]}>
-            <ScrollView style={styles.sidebarScroll} showsVerticalScrollIndicator={false}>
-              <TouchableOpacity 
-                style={[styles.sidebarItem, { backgroundColor: theme.accent }]}
-                onPress={() => router.push('/(tabs)')}
-              >
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <Text style={styles.sidebarItemText}>Nový výkup</Text>
-              </TouchableOpacity>
+          <View
+            style={[
+              styles.sidebar,
+              {
+                backgroundColor: theme.surface,
+                borderRightColor: theme.border,
+              },
+            ]}
+          >
+            <SidebarBrand />
 
-              <View style={[styles.sidebarDivider, { backgroundColor: theme.border }]} />
-
-              <TouchableOpacity 
-                style={[styles.sidebarNavItem, { backgroundColor: theme.inputBackground }]}
-                onPress={() => router.push('/(tabs)')}
+            <ScrollView
+              style={styles.sidebarScroll}
+              showsVerticalScrollIndicator={false}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.sidebarNavItem,
+                  { backgroundColor: theme.inputBackground },
+                ]}
+                onPress={() => router.push("/(tabs)")}
               >
                 <Ionicons name="car" size={20} color={theme.textSecondary} />
-                <Text style={[styles.sidebarNavItemText, { color: theme.text }]}>Výkupy</Text>
+                <Text
+                  style={[styles.sidebarNavItemText, { color: theme.text }]}
+                >
+                  Výkupy
+                </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.sidebarNavItem}
-                onPress={() => router.push('/(tabs)/statistiky')}
+                onPress={() => router.push("/(tabs)/statistiky")}
               >
-                <Ionicons name="bar-chart" size={20} color={theme.textSecondary} />
-                <Text style={[styles.sidebarNavItemText, { color: theme.text }]}>Statistiky</Text>
+                <Ionicons
+                  name="bar-chart"
+                  size={20}
+                  color={theme.textSecondary}
+                />
+                <Text
+                  style={[styles.sidebarNavItemText, { color: theme.text }]}
+                >
+                  Statistiky
+                </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
-                style={[styles.sidebarNavItem, { backgroundColor: theme.accent }]}
-                onPress={() => router.push('/(tabs)/reporty')}
+              <TouchableOpacity
+                style={[
+                  styles.sidebarNavItem,
+                  { backgroundColor: theme.accent },
+                ]}
+                onPress={() => router.push("/(tabs)/reporty")}
               >
                 <Ionicons name="document-text" size={20} color="#FFFFFF" />
-                <Text style={[styles.sidebarNavItemText, { color: '#FFFFFF' }]}>Reporty</Text>
+                <Text style={[styles.sidebarNavItemText, { color: "#FFFFFF" }]}>
+                  Reporty
+                </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.sidebarNavItem}
-                onPress={() => router.push('/(tabs)/notifications')}
+                onPress={() => router.push("/(tabs)/notifications")}
               >
-                <Ionicons name="notifications" size={20} color={theme.textSecondary} />
-                <Text style={[styles.sidebarNavItemText, { color: theme.text }]}>Notifikace</Text>
+                <Ionicons
+                  name="notifications"
+                  size={20}
+                  color={theme.textSecondary}
+                />
+                <Text
+                  style={[styles.sidebarNavItemText, { color: theme.text }]}
+                >
+                  Notifikace
+                </Text>
               </TouchableOpacity>
             </ScrollView>
 
@@ -344,175 +342,590 @@ export default function ReportyScreen() {
 
         {/* CONTENT */}
         <View style={{ flex: 1 }}>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={[styles.title, { color: theme.text }]}>Reporty</Text>
-            <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-              {reportData.startDate} - {reportData.endDate}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={[styles.exportButton, { backgroundColor: theme.accent }]}
-            onPress={handleExport}
-          >
-            <Ionicons name="share-outline" size={20} color="#FFFFFF" />
-            <Text style={styles.exportButtonText}>Export</Text>
-          </TouchableOpacity>
-        </View>
+          {/* Header */}
+          <ScreenHeader
+            title="Reporty"
+            subtitle={`${reportData?.startDate || ""} - ${reportData?.endDate || ""}`}
+            actions={
+              <TouchableOpacity
+                style={[styles.exportButton, { backgroundColor: theme.accent }]}
+                onPress={handleExport}
+              >
+                <Ionicons name="share-outline" size={20} color="#FFFFFF" />
+                <Text style={styles.exportButtonText}>Export</Text>
+              </TouchableOpacity>
+            }
+          />
 
-        {/* Period Selector */}
-        <View style={styles.periodSelector}>
-          {renderPeriodButton('week', 'Týden')}
-          {renderPeriodButton('month', 'Měsíc')}
-          {renderPeriodButton('quarter', 'Čtvrtletí')}
-          {renderPeriodButton('custom', 'Vlastní')}
-        </View>
-
-        {/* Summary Card */}
-        <View style={[styles.summaryCard, { backgroundColor: theme.card }]}>
-          <Text style={[styles.summaryTitle, { color: theme.text }]}>
-            {reportData.periodLabel}
-          </Text>
-          <View style={styles.summaryStats}>
-            <View style={styles.summaryStat}>
-              <Text style={[styles.summaryValue, { color: theme.accent }]}>
-                {reportData.total}
-              </Text>
-              <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>
-                Výkupů celkem
-              </Text>
-            </View>
-            <View style={[styles.summaryDivider, { backgroundColor: theme.border }]} />
-            <View style={styles.summaryStat}>
-              <Text style={[styles.summaryValue, { color: theme.success }]}>
-                {reportData.successRate.toFixed(0)}%
-              </Text>
-              <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>
-                Úspěšnost
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Metrics Grid */}
-        <View style={styles.metricsGrid}>
-          {renderMetricCard('NOVÝ', reportData.byState.new, 'add-circle', theme.accent)}
-          {renderMetricCard('ROZJEDNÁNO', reportData.byState.inProgress, 'time', theme.warning)}
-          {renderMetricCard('VYKOUPENO', reportData.byState.completed, 'checkmark-circle', theme.success)}
-          {renderMetricCard('ODMÍTNUTO', reportData.byState.cancelled, 'close-circle', theme.error)}
-        </View>
-
-        {/* Financial Section */}
-        <View style={[styles.section, { backgroundColor: theme.card }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>
-            Finanční souhrn
-          </Text>
-          <View style={styles.financialRows}>
-            <View style={styles.financialRow}>
-              <Text style={[styles.financialLabel, { color: theme.textSecondary }]}>
-                Dokončené výkupy
-              </Text>
-              <Text style={[styles.financialValue, { color: theme.success }]}>
-                {formatCurrency(reportData.completedValue)}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Top Makes */}
-        <View style={[styles.section, { backgroundColor: theme.card }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>
-            Top značky vozidel
-          </Text>
-          {reportData.topMakes.length > 0 ? (
-            <View style={styles.makesList}>
-              {reportData.topMakes.map(([make, count], index) => (
-                <View key={make} style={styles.makeItem}>
-                  <View style={styles.makeRank}>
-                    <Text style={[styles.makeRankText, { color: theme.textTertiary }]}>
-                      {index + 1}
-                    </Text>
-                  </View>
-                  <Text style={[styles.makeName, { color: theme.text }]}>{make}</Text>
-                  <Text style={[styles.makeCount, { color: theme.textSecondary }]}>
-                    {count} výkupů
-                  </Text>
-                </View>
-              ))}
+          {isLoading ? (
+            <View
+              style={{
+                flex: 1,
+                justifyContent: "center",
+                alignItems: "center",
+              }}
+            >
+              <ActivityIndicator size="large" color={theme.accent} />
             </View>
           ) : (
-            <Text style={[styles.emptyText, { color: theme.textTertiary }]}>
-              Žádná data za vybrané období
-            </Text>
-          )}
-        </View>
-
-        <View style={styles.bottomSpacer} />
-      </ScrollView>
-
-      {/* Custom Date Range Modal */}
-      <Modal
-        visible={showCustomModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowCustomModal(false)}
-      >
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalOverlay}
-        >
-          <TouchableOpacity 
-            style={styles.modalBackdrop} 
-            activeOpacity={1} 
-            onPress={() => setShowCustomModal(false)}
-          />
-          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
-            <View style={styles.modalHeader}>
-              <View style={[styles.modalIconWrapper, { backgroundColor: theme.accent + '20' }]}>
-                <Ionicons name="calendar" size={28} color={theme.accent} />
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+            >
+              {/* Period Selector */}
+              <View style={styles.periodSelector}>
+                {renderPeriodButton("week", "Týden")}
+                {renderPeriodButton("month", "Měsíc")}
+                {renderPeriodButton("year", "Rok")}
+                {renderPeriodButton("custom", "Vlastní")}
               </View>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>Vlastní rozsah dat</Text>
-              <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
-                Vyberte počáteční a koncové datum
-              </Text>
-            </View>
 
-            <View style={styles.modalForm}>
-              <DatePickerField
-                label="Počáteční datum"
-                value={customStartDate}
-                onChange={setCustomStartDate}
-                placeholder="dd.mm.yyyy"
+              {/* Summary Card */}
+              <View
+                style={[styles.summaryCard, { backgroundColor: theme.card }]}
+              >
+                <Text style={[styles.summaryTitle, { color: theme.text }]}>
+                  {reportData?.periodLabel || ""}
+                </Text>
+                <View style={styles.summaryStats}>
+                  <View style={styles.summaryStat}>
+                    <Text
+                      style={[styles.summaryValue, { color: theme.accent }]}
+                    >
+                      {reportData?.total ?? 0}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.summaryLabel,
+                        { color: theme.textSecondary },
+                      ]}
+                    >
+                      Výkupů celkem
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.summaryDivider,
+                      { backgroundColor: theme.border },
+                    ]}
+                  />
+                  <View style={styles.summaryStat}>
+                    <Text
+                      style={[styles.summaryValue, { color: theme.success }]}
+                    >
+                      {reportData?.successRate
+                        ? reportData.successRate.toFixed(0)
+                        : "0"}
+                      %
+                    </Text>
+                    <Text
+                      style={[
+                        styles.summaryLabel,
+                        { color: theme.textSecondary },
+                      ]}
+                    >
+                      Úspěšnost
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Metrics Grid - 2x2 */}
+              <View style={styles.metricsGrid}>
+                {renderMetricCard(
+                  "NOVÝ",
+                  reportData?.byState?.new ?? 0,
+                  "add-circle",
+                  theme.accent,
+                )}
+                {renderMetricCard(
+                  "ROZJEDNÁNO",
+                  reportData?.byState?.inProgress ?? 0,
+                  "time",
+                  theme.warning,
+                )}
+                {renderMetricCard(
+                  "VYKOUPENO",
+                  reportData?.byState?.completed ?? 0,
+                  "checkmark-circle",
+                  theme.success,
+                )}
+                {renderMetricCard(
+                  "ODMÍTNUTO",
+                  reportData?.byState?.cancelled ?? 0,
+                  "close-circle",
+                  theme.error,
+                )}
+              </View>
+
+              {/* Výkupy podle výkupčího */}
+              <View style={[styles.section, { backgroundColor: theme.card }]}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                  Výkupy podle výkupčího
+                </Text>
+                {reportData?.topEmployees &&
+                reportData.topEmployees.length > 0 ? (
+                  <>
+                    <View style={styles.suppliersList}>
+                      {reportData.topEmployees.map((employee: any) => (
+                        <View
+                          key={employee.name}
+                          style={[
+                            styles.supplierItem,
+                            { borderBottomColor: theme.border },
+                          ]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={[
+                                styles.supplierName,
+                                { color: theme.text },
+                              ]}
+                            >
+                              {employee.name}
+                            </Text>
+                            <View style={styles.makeCountWrapper}>
+                              <Text
+                                style={[
+                                  styles.makeCountCompleted,
+                                  { color: theme.success },
+                                ]}
+                              >
+                                {employee.completed}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.makeCountTotal,
+                                  { color: theme.textSecondary },
+                                ]}
+                              >
+                                / {employee.count}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text
+                            style={[
+                              styles.supplierValue,
+                              { color: theme.success },
+                            ]}
+                          >
+                            {formatCurrency(employee.value)}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                    {/* Summary row */}
+                    <View
+                      style={[
+                        styles.supplierItem,
+                        {
+                          paddingTop: 12,
+                          borderTopWidth: 1,
+                          borderTopColor: theme.border,
+                          marginTop: 12,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.supplierName,
+                          { color: theme.text, fontWeight: "700" },
+                        ]}
+                      >
+                        Celkem
+                      </Text>
+                      <Text
+                        style={[
+                          styles.supplierValue,
+                          { color: theme.success, fontWeight: "700" },
+                        ]}
+                      >
+                        {formatCurrency(
+                          reportData.topEmployees.reduce(
+                            (sum: number, e: any) => sum + (e.value || 0),
+                            0,
+                          ),
+                        )}
+                      </Text>
+                    </View>
+                  </>
+                ) : (
+                  <Text
+                    style={[styles.emptyText, { color: theme.textTertiary }]}
+                  >
+                    Žádná data za vybrané období
+                  </Text>
+                )}
+              </View>
+
+              {/* Top Suppliers */}
+              {reportData?.topSuppliers &&
+                reportData.topSuppliers.length > 0 && (
+                  <View
+                    style={[styles.section, { backgroundColor: theme.card }]}
+                  >
+                    <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                      Dodavatelé
+                    </Text>
+                    <View style={styles.suppliersList}>
+                      {reportData.topSuppliers.map(
+                        (supplier: any, index: number) => (
+                          <View
+                            key={supplier.id}
+                            style={[
+                              styles.supplierItem,
+                              { borderBottomColor: theme.border },
+                            ]}
+                          >
+                            <View style={{ flex: 1 }}>
+                              <Text
+                                style={[
+                                  styles.supplierName,
+                                  { color: theme.text },
+                                ]}
+                              >
+                                {supplier.name}
+                              </Text>
+                            </View>
+                            <Text
+                              style={[
+                                styles.supplierValue,
+                                { color: theme.success },
+                              ]}
+                            >
+                              {formatCurrency(supplier.value)}
+                            </Text>
+                          </View>
+                        ),
+                      )}
+                    </View>
+                    {/* Summary row */}
+                    <View
+                      style={[
+                        styles.supplierItem,
+                        {
+                          paddingTop: 12,
+                          borderTopWidth: 1,
+                          borderTopColor: theme.border,
+                          marginTop: 12,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.supplierName,
+                          { color: theme.text, fontWeight: "700" },
+                        ]}
+                      >
+                        Celkem
+                      </Text>
+                      <Text
+                        style={[
+                          styles.supplierValue,
+                          { color: theme.success, fontWeight: "700" },
+                        ]}
+                      >
+                        {formatCurrency(
+                          reportData.topSuppliers.reduce(
+                            (sum: number, s: any) => sum + (s.value || 0),
+                            0,
+                          ),
+                        )}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+              {/* Financial Section */}
+              <View style={[styles.section, { backgroundColor: theme.card }]}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                  Finanční souhrn
+                </Text>
+                <View style={styles.financialRows}>
+                  <View style={styles.financialRow}>
+                    <Text
+                      style={[
+                        styles.financialLabel,
+                        { color: theme.textSecondary },
+                      ]}
+                    >
+                      Dokončené výkupy
+                    </Text>
+                    <Text
+                      style={[styles.financialValue, { color: theme.success }]}
+                    >
+                      {formatCurrency(reportData?.completedValue ?? 0)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Top Makes */}
+              <View style={[styles.section, { backgroundColor: theme.card }]}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                  Top značky vozidel
+                </Text>
+                {reportData?.topMakes && reportData.topMakes.length > 0 ? (
+                  <>
+                    <View style={styles.makesList}>
+                      {reportData.topMakes
+                        .slice(0, 10)
+                        .map((item: any, index: number) => (
+                          <View key={item.make} style={styles.makeItem}>
+                            <View style={styles.makeRank}>
+                              <Text
+                                style={[
+                                  styles.makeRankText,
+                                  { color: theme.textTertiary },
+                                ]}
+                              >
+                                {index + 1}
+                              </Text>
+                            </View>
+                            <Text
+                              style={[styles.makeName, { color: theme.text }]}
+                            >
+                              {item.make}
+                            </Text>
+                            <View style={styles.makeCountWrapper}>
+                              <Text
+                                style={[
+                                  styles.makeCountCompleted,
+                                  { color: theme.success },
+                                ]}
+                              >
+                                {item.completed}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.makeCountTotal,
+                                  { color: theme.textSecondary },
+                                ]}
+                              >
+                                / {item.total}
+                              </Text>
+                            </View>
+                          </View>
+                        ))}
+                    </View>
+                    {reportData.topMakes.length > 10 && (
+                      <TouchableOpacity
+                        style={[
+                          styles.showMoreButton,
+                          { backgroundColor: theme.inputBackground },
+                        ]}
+                        onPress={() => setShowAllMakes(true)}
+                      >
+                        <Text
+                          style={[styles.showMoreText, { color: theme.accent }]}
+                        >
+                          Zobrazit všechny ({reportData.topMakes.length})
+                        </Text>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={18}
+                          color={theme.accent}
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </>
+                ) : (
+                  <Text
+                    style={[styles.emptyText, { color: theme.textTertiary }]}
+                  >
+                    Žádná data za vybrané období
+                  </Text>
+                )}
+              </View>
+
+              {/* Refresh Button */}
+              <View style={styles.refreshButtonContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.refreshButton,
+                    { backgroundColor: theme.accent },
+                  ]}
+                  onPress={loadReportData}
+                >
+                  <Ionicons name="refresh" size={20} color="#FFFFFF" />
+                  <Text style={styles.refreshButtonText}>Obnovit</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.bottomSpacer} />
+            </ScrollView>
+          )}
+          {/* All Makes Modal */}
+          <Modal
+            visible={showAllMakes}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowAllMakes(false)}
+          >
+            <KeyboardAvoidingView
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
+              style={styles.modalOverlay}
+            >
+              <TouchableOpacity
+                style={styles.modalBackdrop}
+                activeOpacity={1}
+                onPress={() => setShowAllMakes(false)}
               />
+              <View
+                style={[
+                  styles.modalContent,
+                  { backgroundColor: theme.card, height: "85%" },
+                ]}
+              >
+                <View style={styles.modalHeader}>
+                  <Text style={[styles.modalTitle, { color: theme.text }]}>
+                    Všechny značky vozidel
+                  </Text>
+                  <TouchableOpacity
+                    style={{ padding: 8 }}
+                    onPress={() => setShowAllMakes(false)}
+                  >
+                    <Ionicons name="close" size={24} color={theme.text} />
+                  </TouchableOpacity>
+                </View>
 
-              <DatePickerField
-                label="Koncové datum"
-                value={customEndDate}
-                onChange={setCustomEndDate}
-                placeholder="dd.mm.yyyy"
-              />
-            </View>
+                <ScrollView
+                  style={{ flex: 1, paddingHorizontal: 20 }}
+                  showsVerticalScrollIndicator={true}
+                >
+                  <View style={styles.makesList}>
+                    {reportData?.topMakes &&
+                      reportData.topMakes.map((item: any, index: number) => (
+                        <View key={item.make} style={styles.makeItem}>
+                          <View style={styles.makeRank}>
+                            <Text
+                              style={[
+                                styles.makeRankText,
+                                { color: theme.textTertiary },
+                              ]}
+                            >
+                              {index + 1}
+                            </Text>
+                          </View>
+                          <Text
+                            style={[styles.makeName, { color: theme.text }]}
+                          >
+                            {item.make}
+                          </Text>
+                          <View style={styles.makeCountWrapper}>
+                            <Text
+                              style={[
+                                styles.makeCountCompleted,
+                                { color: theme.success },
+                              ]}
+                            >
+                              {item.completed}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.makeCountTotal,
+                                { color: theme.textSecondary },
+                              ]}
+                            >
+                              / {item.total}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
+                  </View>
+                </ScrollView>
+              </View>
+            </KeyboardAvoidingView>
+          </Modal>
 
-            <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={[styles.modalButtonSecondary, { backgroundColor: theme.inputBackground }]}
+          {/* Custom Date Range Modal */}
+          <Modal
+            visible={showCustomModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowCustomModal(false)}
+          >
+            <KeyboardAvoidingView
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
+              style={styles.modalOverlay}
+            >
+              <TouchableOpacity
+                style={styles.modalBackdrop}
+                activeOpacity={1}
                 onPress={() => setShowCustomModal(false)}
+              />
+              <View
+                style={[styles.modalContent, { backgroundColor: theme.card }]}
               >
-                <Text style={[styles.modalButtonSecondaryText, { color: theme.text }]}>Zrušit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.modalButtonPrimary, { backgroundColor: theme.accent }]}
-                onPress={handleApplyCustomDates}
-              >
-                <Ionicons name="checkmark" size={20} color="#FFFFFF" />
-                <Text style={styles.modalButtonPrimaryText}>Použít</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+                <View style={styles.modalHeader}>
+                  <View
+                    style={[
+                      styles.modalIconWrapper,
+                      { backgroundColor: theme.accent + "20" },
+                    ]}
+                  >
+                    <Ionicons name="calendar" size={28} color={theme.accent} />
+                  </View>
+                  <Text style={[styles.modalTitle, { color: theme.text }]}>
+                    Vlastní rozsah dat
+                  </Text>
+                  <Text
+                    style={[
+                      styles.modalSubtitle,
+                      { color: theme.textSecondary },
+                    ]}
+                  >
+                    Vyberte počáteční a koncové datum
+                  </Text>
+                </View>
+
+                <View style={styles.modalForm}>
+                  <DatePickerField
+                    label="Počáteční datum"
+                    value={customStartDate}
+                    onChange={setCustomStartDate}
+                    placeholder="dd.mm.yyyy"
+                  />
+
+                  <DatePickerField
+                    label="Koncové datum"
+                    value={customEndDate}
+                    onChange={setCustomEndDate}
+                    placeholder="dd.mm.yyyy"
+                  />
+                </View>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.modalButtonSecondary,
+                      { backgroundColor: theme.inputBackground },
+                    ]}
+                    onPress={() => setShowCustomModal(false)}
+                  >
+                    <Text
+                      style={[
+                        styles.modalButtonSecondaryText,
+                        { color: theme.text },
+                      ]}
+                    >
+                      Zrušit
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.modalButtonPrimary,
+                      { backgroundColor: theme.accent },
+                    ]}
+                    onPress={handleApplyCustomDates}
+                  >
+                    <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                    <Text style={styles.modalButtonPrimaryText}>Použít</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </Modal>
         </View>
       </View>
     </SafeAreaView>
@@ -524,7 +937,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   splitLayout: {
-    flexDirection: 'row',
+    flexDirection: "row",
     flex: 1,
   },
   stackedLayout: {
@@ -533,9 +946,9 @@ const styles = StyleSheet.create({
   sidebar: {
     width: 220,
     borderRightWidth: 1,
+    paddingVertical: 16,
     paddingHorizontal: 12,
-    paddingBottom: 0,
-    flexDirection: 'column',
+    flexDirection: "column",
   },
   sidebarScroll: {
     flex: 1,
@@ -553,8 +966,8 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   sidebarUserHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   sidebarUserInfo: {
@@ -562,20 +975,20 @@ const styles = StyleSheet.create({
   },
   sidebarUserName: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   sidebarUserEmail: {
     fontSize: 11,
-    fontWeight: '400',
+    fontWeight: "400",
   },
   sidebarUserId: {
     fontSize: 10,
-    fontWeight: '400',
-    fontFamily: 'monospace',
+    fontWeight: "400",
+    fontFamily: "monospace",
   },
   sidebarUserNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
   },
   adminTag: {
@@ -585,25 +998,11 @@ const styles = StyleSheet.create({
   },
   adminTagText: {
     fontSize: 10,
-    fontWeight: '700',
-  },
-  sidebarItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 12,
-    marginHorizontal: 4,
-  },
-  sidebarItemText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontWeight: "700",
   },
   sidebarNavItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 10,
@@ -613,43 +1012,26 @@ const styles = StyleSheet.create({
   },
   sidebarNavItemText: {
     fontSize: 14,
-    fontWeight: '500',
-  },
-  sidebarDivider: {
-    height: 1,
-    marginVertical: 8,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
+    fontWeight: "500",
   },
   exportButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 20,
     gap: 6,
   },
   exportButtonText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
+  },
+  scrollContent: {
+    paddingTop: 16,
   },
   periodSelector: {
-    flexDirection: 'row',
+    flexDirection: "row",
     paddingHorizontal: 20,
     gap: 8,
     marginBottom: 16,
@@ -658,11 +1040,11 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 10,
     borderRadius: 10,
-    alignItems: 'center',
+    alignItems: "center",
   },
   periodButtonText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   summaryCard: {
     marginHorizontal: 20,
@@ -672,21 +1054,21 @@ const styles = StyleSheet.create({
   },
   summaryTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 16,
-    textAlign: 'center',
+    textAlign: "center",
   },
   summaryStats: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   summaryStat: {
     flex: 1,
-    alignItems: 'center',
+    alignItems: "center",
   },
   summaryValue: {
     fontSize: 36,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 4,
   },
   summaryLabel: {
@@ -698,31 +1080,30 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
   },
   metricsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     paddingHorizontal: 20,
-    gap: 8,
+    gap: 12,
     marginBottom: 8,
-    justifyContent: 'space-between',
+    justifyContent: "space-between",
   },
   metricCard: {
-    flex: 1,
-    minWidth: '45%',
+    width: "48%",
     padding: 16,
     borderRadius: 12,
-    alignItems: 'center',
+    alignItems: "center",
   },
   metricIcon: {
     width: 40,
     height: 40,
     borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 8,
   },
   metricValue: {
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 4,
   },
   metricLabel: {
@@ -736,16 +1117,16 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 16,
   },
   financialRows: {
     gap: 0,
   },
   financialRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingVertical: 12,
   },
   financialLabel: {
@@ -753,7 +1134,7 @@ const styles = StyleSheet.create({
   },
   financialValue: {
     fontSize: 17,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   divider: {
     height: 1,
@@ -762,32 +1143,56 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   makeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   makeRank: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(0,0,0,0.05)",
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 12,
   },
   makeRankText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   makeName: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '500',
+    fontWeight: "500",
   },
-  makeCount: {
+  makeCountWrapper: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 2,
+  },
+  makeCountCompleted: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  makeCountTotal: {
     fontSize: 14,
+    fontWeight: "500",
+  },
+  showMoreButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 12,
+    gap: 8,
+  },
+  showMoreText: {
+    fontSize: 15,
+    fontWeight: "600",
   },
   emptyText: {
-    textAlign: 'center',
+    textAlign: "center",
     fontSize: 14,
   },
   bottomSpacer: {
@@ -796,35 +1201,40 @@ const styles = StyleSheet.create({
   // Modal styles
   modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end',
+    justifyContent: "flex-end",
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
   },
   modalContent: {
+    width: "100%",
+    maxWidth: 480,
+    alignSelf: "center",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
     paddingHorizontal: 20,
     paddingTop: 24,
     paddingBottom: 32,
     zIndex: 1,
   },
   modalHeader: {
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: 24,
   },
   modalIconWrapper: {
     width: 56,
     height: 56,
     borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 12,
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 8,
   },
   modalSubtitle: {
@@ -835,32 +1245,72 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   modalActions: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 12,
   },
   modalButtonSecondary: {
     flex: 1,
     paddingVertical: 14,
     borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   modalButtonSecondaryText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   modalButtonPrimary: {
     flex: 1,
     paddingVertical: 14,
     borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
     gap: 8,
   },
   modalButtonPrimaryText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
+  },
+  suppliersList: {
+    gap: 0,
+  },
+  supplierItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  supplierName: {
+    fontSize: 15,
+    fontWeight: "500",
+    marginBottom: 4,
+  },
+  supplierSubtitle: {
+    fontSize: 13,
+  },
+  supplierValue: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  refreshButtonContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
+  },
+  refreshButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+  },
+  refreshButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

@@ -1,129 +1,241 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Notifications from 'expo-notifications';
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { useAuth } from './AuthContext';
+import { API_BASE_URL } from '@/services/apiService';
 
-export interface InAppNotification {
-  id: string;
+export interface ServerNotification {
+  id: number;
+  user_id: number;
   title: string;
   body: string;
-  type: 'info' | 'success' | 'warning' | 'error' | 'push';
+  notification_type: string;
   data?: Record<string, any>;
+  is_read: boolean;
+  read_at?: string | null;
+  push_sent_at?: string | null;
+  push_failed: boolean;
+  created_at: string;
+}
+
+export interface InAppNotification extends ServerNotification {
   timestamp: number;
-  read: boolean;
-  persistent?: boolean; // Persist to storage if true
 }
 
 interface NotificationContextType {
   notifications: InAppNotification[];
-  addNotification: (notification: Omit<InAppNotification, 'id' | 'timestamp' | 'read'>) => string;
-  removeNotification: (id: string) => void;
+  addNotification: (title: string, body: string, type: string, data?: Record<string, any>) => void;
+  removeNotification: (id: number) => void;
   clearNotifications: () => void;
-  markAsRead: (id: string) => void;
+  markAsRead: (id: number) => void;
+  markAllAsRead: () => void;
   unreadCount: number;
-  addFromPushNotification: (notification: Notifications.Notification) => void;
+  isLoading: boolean;
+  refreshNotifications: () => Promise<void>;
+  loadNotifications: () => Promise<void>;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'notifications_history';
-
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
-  // Load persisted notifications on startup
   useEffect(() => {
-    loadPersistedNotifications();
-  }, []);
+    if (user?.id) {
+      const loadNotifs = async () => {
+        try {
+          setIsLoading(true);
+          const url = `${API_BASE_URL}/notifications?user_id=${user.id}&limit=100&offset=0`;
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
 
-  const loadPersistedNotifications = async () => {
-    try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as InAppNotification[];
-        setNotifications(parsed);
-      }
-    } catch (error) {
-    } finally {
-      setIsLoaded(true);
-    }
-  };
+          if (!response.ok) {
+            setIsLoading(false);
+            return;
+          }
 
-  const persistNotifications = async (notifs: InAppNotification[]) => {
-    try {
-      // Keep only push notifications, max 100 most recent
-      const pushNotifs = notifs.filter((n) => n.type === 'push').slice(0, 100);
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(pushNotifs));
-    } catch (error) {
-    }
-  };
+          const result = await response.json();
+          const serverNotifications = (result.data || []) as ServerNotification[];
 
-  const addNotification = useCallback(
-    (notification: Omit<InAppNotification, 'id' | 'timestamp' | 'read'>): string => {
-      const id = `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const newNotification: InAppNotification = {
-        ...notification,
-        id,
-        timestamp: Date.now(),
-        read: false,
-        persistent: notification.type === 'push', // Persist push notifications
+          const notificationsWithTimestamp: InAppNotification[] = serverNotifications.map(n => ({
+            ...n,
+            timestamp: new Date(n.created_at).getTime(),
+          }));
+
+          setNotifications(notificationsWithTimestamp);
+          const unread = notificationsWithTimestamp.filter(n => !n.is_read).length;
+          setUnreadCount(unread);
+        } catch (error) {
+          // Silent fail
+        } finally {
+          setIsLoading(false);
+        }
       };
 
-      setNotifications((prev) => {
-        const updated = [newNotification, ...prev];
-        if (newNotification.persistent) {
-          persistNotifications(updated);
-        }
-        return updated;
+      loadNotifs();
+    }
+  }, [user?.id]);
+
+  const refreshNotifications = useCallback(async () => {
+    if (!user?.id) {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const url = `${API_BASE_URL}/notifications?user_id=${user.id}&limit=100&offset=0`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
-      // Auto-remove in-app toast after 5 seconds
-      // But keep push notifications in history
-      if (notification.type !== 'push') {
-        const duration = notification.type === 'error' ? 8000 : 5000;
-        const timer = setTimeout(() => {
-          removeNotification(id);
-        }, duration);
+      if (!response.ok) {
+        throw new Error(`Failed to load notifications: ${response.status}`);
       }
 
-      return id;
+      const result = await response.json();
+      const serverNotifications = (result.data || []) as ServerNotification[];
+
+      const notificationsWithTimestamp: InAppNotification[] = serverNotifications.map(n => ({
+        ...n,
+        timestamp: new Date(n.created_at).getTime(),
+      }));
+
+      setNotifications(notificationsWithTimestamp);
+      const unread = notificationsWithTimestamp.filter(n => !n.is_read).length;
+      setUnreadCount(unread);
+    } catch (error) {
+      // Silent fail
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user?.id]);
+
+  const addNotification = useCallback(
+    async (title: string, body: string, type: string, data?: Record<string, any>) => {
+      if (!user?.id) return;
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/notifications`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            action: 'create',
+            title,
+            body,
+            type,
+            data,
+          }),
+        });
+
+        if (response.ok) {
+          await refreshNotifications();
+        }
+      } catch (error) {
+        // Silent fail
+      }
     },
-    []
+    [user?.id, refreshNotifications]
   );
 
-  const removeNotification = useCallback((id: string) => {
-    setNotifications((prev) => {
-      const updated = prev.filter((n) => n.id !== id);
-      persistNotifications(updated);
-      return updated;
-    });
-  }, []);
+  const removeNotification = useCallback(
+    async (id: number) => {
+      if (!user?.id) return;
+
+      try {
+        await fetch(`${API_BASE_URL}/notifications`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            action: 'delete',
+            notification_id: id,
+          }),
+        });
+
+        setNotifications(prev => prev.filter(n => n.id !== id));
+      } catch (error) {
+        // Silent fail
+      }
+    },
+    [user?.id]
+  );
+
+  const markAsRead = useCallback(
+    async (id: number) => {
+      if (!user?.id) return;
+
+      try {
+        await fetch(`${API_BASE_URL}/notifications`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            action: 'mark_as_read',
+            notification_id: id,
+          }),
+        });
+
+        setNotifications(prev =>
+          prev.map(n =>
+            n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n
+          )
+        );
+
+        setUnreadCount(prev => Math.max(0, prev - 1));
+      } catch (error) {
+        // Silent fail
+      }
+    },
+    [user?.id]
+  );
+
+  const markAllAsRead = useCallback(
+    async () => {
+      if (!user?.id) return;
+
+      try {
+        await fetch(`${API_BASE_URL}/notifications`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            action: 'mark_all_as_read',
+          }),
+        });
+
+        setNotifications(prev =>
+          prev.map(n => ({ ...n, is_read: true, read_at: new Date().toISOString() }))
+        );
+
+        setUnreadCount(0);
+      } catch (error) {
+        // Silent fail
+      }
+    },
+    [user?.id]
+  );
 
   const clearNotifications = useCallback(() => {
     setNotifications([]);
-    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+    setUnreadCount(0);
   }, []);
-
-  const markAsRead = useCallback((id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
-  }, []);
-
-  const addFromPushNotification = useCallback(
-    (notification: Notifications.Notification) => {
-      const content = notification.request.content;
-      addNotification({
-        title: content.title || 'Notifikace',
-        body: content.body || '',
-        type: 'push',
-        data: content.data,
-      });
-    },
-    [addNotification]
-  );
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
 
   const value: NotificationContextType = {
     notifications,
@@ -131,8 +243,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     removeNotification,
     clearNotifications,
     markAsRead,
+    markAllAsRead,
     unreadCount,
-    addFromPushNotification,
+    isLoading,
+    refreshNotifications,
+    loadNotifications: refreshNotifications,
   };
 
   return (

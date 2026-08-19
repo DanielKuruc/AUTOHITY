@@ -1,5 +1,5 @@
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { apiService } from '@/services/apiService';
-import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 export interface User {
   id: string;
@@ -50,7 +50,6 @@ export const UsersProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     } catch (err: any) {
       setError(err.message);
-      console.error('[UsersContext] Error loading users:', err);
       setUsers([]);
     } finally {
       setIsLoading(false);

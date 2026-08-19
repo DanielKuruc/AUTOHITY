@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Modal,
-  Alert,
   ActivityIndicator,
   Platform,
   Image,
@@ -15,6 +14,36 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
+import { extractVINFromText, normalizeVinInput } from '@/utils/vinExtraction';
+import { showAlert } from '@/utils/alert';
+
+interface OcrModule {
+  isSupported: boolean;
+  extractTextFromImage: (uri: string) => Promise<string[]>;
+}
+
+let ocrModule: OcrModule | null = null;
+let ocrLoadAttempted = false;
+
+/**
+ * expo-text-extractor je nativní modul - v Expo Go neexistuje a jeho
+ * `requireNativeModule` vyhodí výjimku už při importu. Kdyby se importoval
+ * staticky, spadla by celá appka při startu (VinScanner se táhne přes
+ * NewPurchaseModal až do záložky Výkupy). Proto ho načítáme až na vyžádání
+ * a selhání tolerujeme - bez dev buildu se prostě zadá VIN ručně.
+ */
+function getOcr(): OcrModule | null {
+  if (!ocrLoadAttempted) {
+    ocrLoadAttempted = true;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- statický import by v Expo Go shodil celou appku
+      ocrModule = require('expo-text-extractor');
+    } catch {
+      ocrModule = null;
+    }
+  }
+  return ocrModule;
+}
 
 interface VinScannerProps {
   visible: boolean;
@@ -29,7 +58,42 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualVin, setManualVin] = useState('');
+  const [ocrFailed, setOcrFailed] = useState(false);
   const cameraRef = useRef<any>(null);
+
+  /**
+   * Pustí OCR na obrázek a předvyplní nalezený VIN k potvrzení.
+   * Uživatel výsledek vždy vidí a může ho opravit - OCR se u ražených
+   * a špinavých štítků občas seknout může.
+   */
+  const runOcr = async (uri: string) => {
+    setCapturedImage(uri);
+    setOcrFailed(false);
+
+    const ocr = getOcr();
+    if (!ocr?.isSupported) {
+      setIsProcessing(false);
+      setShowManualInput(true);
+      setOcrFailed(true);
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const lines = await ocr.extractTextFromImage(uri);
+      const vin = extractVINFromText(lines);
+      if (vin) {
+        setManualVin(vin);
+      } else {
+        setOcrFailed(true);
+      }
+    } catch (error) {
+      setOcrFailed(true);
+    } finally {
+      setIsProcessing(false);
+      setShowManualInput(true);
+    }
+  };
 
   const handleCapture = async () => {
     if (!cameraRef.current) return;
@@ -40,28 +104,21 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
         quality: 0.8,
         base64: false,
       });
-      setCapturedImage(photo.uri);
-      // Po vyfocení nabídneme ruční zadání
-      setTimeout(() => {
-        setIsProcessing(false);
-        setShowManualInput(true);
-      }, 500);
+      await runOcr(photo.uri);
     } catch (error) {
-      console.error('Chyba při focení:', error);
-      Alert.alert('Chyba', 'Nepodařilo se pořídit fotografii');
+      showAlert('Chyba', 'Nepodařilo se pořídit fotografii');
       setIsProcessing(false);
     }
   };
 
   const handlePickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.8,
     });
 
     if (!result.canceled && result.assets[0]) {
-      setCapturedImage(result.assets[0].uri);
-      setShowManualInput(true);
+      await runOcr(result.assets[0].uri);
     }
   };
 
@@ -70,10 +127,10 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
   };
 
   const handleConfirmVin = () => {
-    const cleanVin = manualVin.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+    const cleanVin = normalizeVinInput(manualVin);
 
     if (cleanVin.length !== 17) {
-      Alert.alert('Chyba', 'VIN musí mít přesně 17 znaků');
+      showAlert('Chyba', 'VIN musí mít přesně 17 znaků');
       return;
     }
 
@@ -86,6 +143,7 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
     setCapturedImage(null);
     setShowManualInput(false);
     setManualVin('');
+    setOcrFailed(false);
   };
 
   if (!permission) {
@@ -158,7 +216,7 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
             {isProcessing && (
               <View style={styles.processingOverlay}>
                 <ActivityIndicator size="large" color="#FFFFFF" />
-                <Text style={styles.processingText}>Zpracovávám...</Text>
+                <Text style={styles.processingText}>Čtu VIN z fotky...</Text>
               </View>
             )}
           </View>
@@ -226,7 +284,11 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
           <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
               <Text style={[styles.modalTitle, { color: theme.text }]}>
-                {capturedImage ? 'Přepište VIN z fotky' : 'Zadejte VIN'}
+                {!capturedImage
+                  ? 'Zadejte VIN'
+                  : ocrFailed
+                    ? 'Přepište VIN z fotky'
+                    : 'Zkontrolujte VIN'}
               </Text>
 
               {capturedImage && (
@@ -234,18 +296,24 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
               )}
 
               <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
-                Zadejte 17-místný VIN kód
+                {capturedImage && !ocrFailed
+                  ? 'Načteno z fotky - ověřte správnost'
+                  : capturedImage && ocrFailed
+                    ? 'VIN se nepodařilo přečíst, zadejte ho ručně'
+                    : 'Zadejte 17-místný VIN kód'}
               </Text>
 
               <TextInput
-                style={[styles.vinInput, { 
-                  backgroundColor: theme.inputBackground, 
+                style={[styles.vinInput, {
+                  backgroundColor: theme.inputBackground,
                   color: theme.text,
-                  borderColor: theme.border 
+                  borderColor: capturedImage && !ocrFailed ? theme.accent : theme.border,
                 }]}
                 value={manualVin}
                 onChangeText={setManualVin}
-                placeholder="WVWZZZ3CZWE123456"
+                // Záměrně ne ukázkový VIN - v šedé barvě vypadal jako načtená
+                // hodnota a nebylo poznat, že je pole prázdné
+                placeholder="–––––––––––––––––"
                 placeholderTextColor={theme.textTertiary}
                 autoCapitalize="characters"
                 autoCorrect={false}
@@ -253,7 +321,7 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
               />
 
               <Text style={[styles.charCount, { color: theme.textTertiary }]}>
-                {manualVin.length}/17 znaků
+                {normalizeVinInput(manualVin).length}/17 znaků
               </Text>
 
               <View style={styles.modalButtons}>
@@ -264,8 +332,14 @@ export function VinScanner({ visible, onClose, onVinDetected }: VinScannerProps)
                   <Text style={[styles.cancelButtonText, { color: theme.text }]}>Zrušit</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, styles.confirmButton, { backgroundColor: theme.accent }]}
+                  style={[
+                    styles.modalButton,
+                    styles.confirmButton,
+                    { backgroundColor: theme.accent },
+                    normalizeVinInput(manualVin).length !== 17 && styles.confirmButtonDisabled,
+                  ]}
                   onPress={handleConfirmVin}
+                  disabled={normalizeVinInput(manualVin).length !== 17}
                 >
                   <Text style={styles.confirmButtonText}>Potvrdit</Text>
                 </TouchableOpacity>
@@ -313,7 +387,7 @@ const styles = StyleSheet.create({
     resizeMode: 'contain',
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -362,7 +436,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   processingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -515,6 +589,9 @@ const styles = StyleSheet.create({
   },
   cancelButton: {},
   confirmButton: {},
+  confirmButtonDisabled: {
+    opacity: 0.4,
+  },
   cancelButtonText: {
     fontSize: 16,
     fontWeight: '600',

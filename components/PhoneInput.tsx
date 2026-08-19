@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
+import { resolveKeyboardType } from '@/utils/keyboard';
 
 const COUNTRY_CODES = [
   { code: '+420', country: 'CZ', flag: '🇨🇿', name: 'Česká republika' },
@@ -94,9 +95,9 @@ export function PhoneInput({ label, value, onChangeText, placeholder, error = fa
           style={[styles.input, { color: theme.text }]}
           value={number}
           onChangeText={handleNumberChange}
-          placeholder={placeholder || 'xxx xxx xxx'}
+          placeholder="xxx xxx xxx"
           placeholderTextColor={theme.textTertiary}
-          keyboardType="phone-pad"
+          keyboardType={resolveKeyboardType('phone-pad')}
           returnKeyType="done"
         />
       </View>
@@ -196,6 +197,7 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     width: '85%',
+    maxWidth: 400,
     maxHeight: '70%',
     borderRadius: 16,
     overflow: 'hidden',

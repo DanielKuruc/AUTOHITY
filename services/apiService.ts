@@ -1,11 +1,12 @@
 import { Purchase } from '@/constants/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
+import { authEndpoint } from '@/services/authApiService';
 
 const PHP_BASE = process.env.EXPO_PUBLIC_PHP_API_BASE || 'https://autohity.cz';
-const API_BASE_URL = `${PHP_BASE}/php-api`;
+export const API_BASE_URL = `${PHP_BASE}/php-api`;
 const AUTH_API_URL = process.env.EXPO_PUBLIC_AUTH_API_URL || 'https://auth-server.example.com'; // Separate auth server - set via env
 
 const ABSOLUTE_BASE_URL = 'https://autohity.cz';
@@ -19,19 +20,27 @@ const absolutizeUrl = (u: string): string => {
   return `${ABSOLUTE_BASE_URL}/${u}`;
 };
 
-// JWT tokenty již nepoužíváme; placeholder funkce zachována kvůli kompatibilitě
+// Aktuální session token z AuthContext - AuthContext ho sem propisuje při loginu/
+// logoutu/rehydrataci, aby ho i moduly mimo React strom (tento soubor) mohly
+// přiložit k požadavkům na php-api (např. admin endpointy chráněné Auth::requireAdmin()).
 let globalJwtToken: string | null = null;
-export const setGlobalJwtToken = (_token: string | null) => {
-  globalJwtToken = null;
+export const setGlobalJwtToken = (token: string | null) => {
+  globalJwtToken = token;
 };
-const getAuthToken = (): string | null => null;
+const getAuthToken = (): string | null => globalJwtToken;
 
-// Helper to create auth headers
-const getAuthHeaders = () => {
+// Helper to create auth headers - exported so other service modules (e.g.
+// vehicleMakesModelsApi.ts) can attach the same Bearer token without duplicating this.
+export const getAuthHeaders = () => {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
   };
+
+  const token = getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
 
   return headers;
 };
@@ -65,7 +74,7 @@ const normalizeBool = (v: any): boolean | undefined => {
   return undefined;
 };
 
-const transformApiToCamelCase = (obj: any): any => {
+export const transformApiToCamelCase = (obj: any): any => {
   if (Array.isArray(obj)) {
     return obj.map(transformApiToCamelCase);
   }
@@ -87,7 +96,15 @@ const transformApiToCamelCase = (obj: any): any => {
         transformed['images'] = value;
       } else if (key === 'defect_photos' && Array.isArray(value)) {
         transformed['defectImages'] = value;
-      } else if (camelKey.startsWith('is') || camelKey.startsWith('has')) {
+      } else if ((camelKey.startsWith('is') || camelKey.startsWith('has')) && camelKey !== 'isPriority') {
+        // CRITICAL: isPriority MUST stay as INT (0/1), NOT convert to boolean!
+        const b = normalizeBool(value);
+        transformed[camelKey] = b === undefined ? value : b;
+      } else if (camelKey === 'isPriority') {
+        // isPriority stays as INT 0 or 1, never convert to boolean
+        transformed[camelKey] = value === null || value === undefined ? undefined : (value === 1 || value === '1' ? 1 : 0);
+      } else if (camelKey === 'registered' || camelKey === 'cebia' || camelKey === 'caVertical' || camelKey === 'dovoz' || camelKey === 'prvniMajitel' || camelKey === 'servisniKnizka' || camelKey === 'bezpecnostniSrouby' || camelKey === 'kolaAI') {
+        // CRITICAL: Convert vehicle booleans from string "0"/"1" to actual boolean
         const b = normalizeBool(value);
         transformed[camelKey] = b === undefined ? value : b;
       } else if (camelKey === 'carDetails' || key === 'car_details') {
@@ -116,6 +133,9 @@ const transformApiToCamelCase = (obj: any): any => {
         } else {
           transformed[camelKey] = value;
         }
+      } else if (key === 'client_type') {
+        // ✅ FIX: client_type is 'person' or 'company' - no recursive transformation, just key conversion
+        transformed['clientType'] = value;
       } else {
         transformed[camelKey] = transformApiToCamelCase(value);
       }
@@ -255,6 +275,15 @@ class ApiService {
     if (sanitized.carDetails) {
       const cd = sanitized.carDetails;
 
+      // ✅ FIX: Když registered=false, vynulovat skrytá pole
+      if (cd.registered === false) {
+        cd.spz = null;
+        cd.stk = null;
+        cd.pocetVlastniku = null;
+        cd.pocetProvozovatelu = null;
+        cd.prvniMajitel = null;
+      }
+
       // Handle firstRegistration conversion
       if (!cd.firstRegistration && cd.doProvozu) {
         cd.firstRegistration = cd.doProvozu;
@@ -302,12 +331,11 @@ class ApiService {
   }
 
   /**
-   * Získá všechny výkupy
+   * Získá všechny výkupy (používá se pro zpětnou kompatibilitu - načítá první stránku)
    */
   async getPurchases(): Promise<Purchase[]> {
     try {
-
-      const response = await fetch(`${API_BASE_URL}/purchases`, {
+      const response = await fetch(`${API_BASE_URL}/purchases?offset=0&limit=100`, {
         method: 'GET',
         headers: getAuthHeaders(),
       });
@@ -354,7 +382,51 @@ class ApiService {
 
       return transformed;
     } catch (error: any) {
-      console.error('[ApiService] Get error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Získá stránku výkupů s paginací
+   */
+  async fetchPurchasesPage(page: number, pageSize: number, search?: string): Promise<{ items: Purchase[]; total: number; hasMore: boolean }> {
+    try {
+      const offset = page * pageSize;
+      const searchParam = search && search.trim() ? `&search=${encodeURIComponent(search.trim())}` : '';
+      const response = await fetch(`${API_BASE_URL}/purchases?offset=${offset}&limit=${pageSize}${searchParam}`, {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        // Server posílá důvod v těle - bez něj je z chyby jen holé číslo
+        let detail = '';
+        try {
+          const body = await response.text();
+          const parsed = JSON.parse(body);
+          detail = (parsed?.error || body || '').slice(0, 300);
+        } catch {
+          // tělo není JSON - detail zůstane prázdný
+        }
+        throw new Error(`Chyba při načítání: ${response.status}${detail ? ` – ${detail}` : ''}`);
+      }
+
+      const result = await response.json();
+      const data = result.data || [];
+      const transformed = transformApiToCamelCase(data);
+      // Absolutizuj URL fotek
+      transformed.forEach((p: any) => {
+        if (Array.isArray(p.images)) p.images = p.images.map((x: string) => absolutizeUrl(x));
+        if (Array.isArray(p.defectImages)) p.defectImages = p.defectImages.map((x: string) => absolutizeUrl(x));
+        if (p.coverPhotoUri) p.coverPhotoUri = absolutizeUrl(p.coverPhotoUri);
+      });
+
+      return {
+        items: transformed,
+        total: result.total || 0,
+        hasMore: result.hasMore || false,
+      };
+    } catch (error: any) {
       throw error;
     }
   }
@@ -408,7 +480,6 @@ class ApiService {
 
       return transformed;
     } catch (error: any) {
-      console.error('[ApiService] Get by ID error:', error);
       throw error;
     }
   }
@@ -422,14 +493,13 @@ class ApiService {
       // IMPORTANT: Only include fields that are explicitly provided in the purchase object
       // Do NOT normalize/reset fields that aren't included (e.g., inspectionDate, inspectionTime)
       const apiData: any = {};
-      
       // Only process fields that are actually in the purchase object
       const fieldsToMap: (keyof Partial<Purchase>)[] = [
         'clientName', 'clientType', 'spz', 'purchaseDate', 'purchaseTime', 'purchaseState',
         'employeeId', 'totalAmount', 'customerPrice', 'offeredPrice', 'expectedSalePrice',
         'phone', 'street', 'city', 'postalCode', 'notes', 'serviceNotes', 'sourceKnowledge',
-        'isVatPayer', 'isCounterAccount', 'vinVerified', 'coverPhotoIndex', 'coverPhotoUri',
-        'carDetails', 'componentStatuses', 'companyInfo'
+        'isVatPayer', 'isCounterAccount', 'vinVerified',
+        'carDetails', 'componentStatuses', 'companyInfo', 'isPriority', 'paintThickness'
       ];
 
       // Only add fields that are explicitly in purchase object
@@ -448,12 +518,16 @@ class ApiService {
         apiData.inspectionTime = purchase.inspectionTime;
       }
 
-      // Photos handling
-      if (purchase.images && purchase.images.length > 0) {
-        apiData.photos = JSON.stringify(purchase.images);
+      // Photos handling - CRITICAL: Send as ARRAY, not stringified JSON
+      if ('images' in purchase) {
+        apiData.images = Array.isArray(purchase.images) ? purchase.images : [];
       }
-      if (purchase.defectImages && purchase.defectImages.length > 0) {
-        apiData.defect_photos = JSON.stringify(purchase.defectImages);
+      if ('defectImages' in purchase) {
+        apiData.defectImages = Array.isArray(purchase.defectImages) ? purchase.defectImages : [];
+      }
+      // CRITICAL: Handle coverPhotoUri - must include even if null to delete from DB
+      if ('coverPhotoUri' in purchase) {
+        apiData.coverPhotoUri = purchase.coverPhotoUri ?? null;
       }
 
       // Now sanitize only the fields that are present
@@ -473,7 +547,6 @@ class ApiService {
 
       return result;
     } catch (error: any) {
-      console.error('[ApiService] Update error:', error);
       throw error;
     }
   }
@@ -488,7 +561,6 @@ class ApiService {
     });
     const text = await response.text();
     if (!response.ok) {
-      console.error('[ApiService] Delete failed:', response.status, text);
       throw new Error(`Chyba při mazání: ${response.status}`);
     }
   }
@@ -528,7 +600,6 @@ class ApiService {
       const result = await response.json();
       return result.data || result || [];
     } catch (error: any) {
-      console.error('[ApiService] Search error:', error);
       throw error;
     }
   }
@@ -539,7 +610,7 @@ class ApiService {
    */
   async login(userName: string, password: string): Promise<any> {
     try {
-      const url = 'https://app.autohity.cz/api/account/sign-in';
+      const url = authEndpoint('sign-in');
 
       const response = await fetch(url, {
         method: 'POST',
@@ -557,10 +628,8 @@ class ApiService {
         let errorMessage = `HTTP ${response.status}`;
         try {
           const errorData = JSON.parse(responseText);
-          console.error('[ApiService] API chyba:', errorData);
           errorMessage = errorData.error || errorData.message || errorMessage;
         } catch (parseError) {
-          console.error('[ApiService] Cannot parse error response:', responseText);
         }
         throw new Error(`Load failed: ${errorMessage}`);
       }
@@ -570,7 +639,6 @@ class ApiService {
       try {
         result = JSON.parse(responseText);
       } catch (parseError) {
-        console.error('[ApiService] Cannot parse success response:', responseText);
         throw new Error('Load failed: Invalid response format');
       }
 
@@ -594,8 +662,6 @@ class ApiService {
         },
       };
     } catch (error: any) {
-      console.error('[ApiService] Login error:', error.message);
-      console.error('[ApiService] Login error stack:', error);
       // Vrať chybu s jasným textem
       throw new Error(error.message || 'Load failed');
     }
@@ -611,7 +677,7 @@ class ApiService {
         throw new Error('Token není k dispozici');
       }
 
-      const url = 'https://app.autohity.cz/api/account/profile';
+      const url = authEndpoint('profile');
 
       const response = await fetch(url, {
         method: 'GET',
@@ -641,7 +707,6 @@ class ApiService {
         },
       };
     } catch (error: any) {
-      console.error('[ApiService] Get profile error:', error);
       throw error;
     }
   }
@@ -654,7 +719,6 @@ class ApiService {
       await AsyncStorage.removeItem('jwtToken'); // už se nepoužívá, ale čistíme případné zbytky
       setGlobalJwtToken(null); // no-op
     } catch (error: any) {
-      console.error('[ApiService] Logout error:', error);
       throw error;
     }
   }
@@ -668,7 +732,6 @@ class ApiService {
       setGlobalJwtToken(null);
       return null;
     } catch (error: any) {
-      console.error('[ApiService] Restore session error:', error);
       return null;
     }
   }
@@ -728,7 +791,6 @@ class ApiService {
 
       return csv;
     } catch (error: any) {
-      console.error('[ApiService] Export error:', error);
       throw error;
     }
   }
@@ -745,6 +807,7 @@ class ApiService {
 
       // Compress + ensure local files before upload
       const preparedFiles: { uri: string; name: string; type: string }[] = [];
+      const tempFiles: string[] = []; // downloaded/manipulated copies to clean up after upload
       let index = 0;
       for (const originalUri of photoUris) {
         const filename = `photo_${pid}_${Date.now()}_${index++}.jpg`;
@@ -756,8 +819,8 @@ class ApiService {
           try {
             const dl = await FileSystem.downloadAsync(workUri, downloadPath);
             workUri = dl.uri;
+            tempFiles.push(workUri);
           } catch (e) {
-            console.warn('[ApiService] Remote image download failed, skipping:', workUri, e);
             continue; // skip this file
           }
         }
@@ -772,48 +835,56 @@ class ApiService {
               { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
             );
             localUri = manipulated.uri || workUri;
+            if (localUri !== workUri) tempFiles.push(localUri);
           }
         } catch (e) {
-          console.warn('[ApiService] Compression failed, using original:', e);
         }
 
         preparedFiles.push({ uri: localUri, name: filename, type: 'image/jpeg' });
       }
-      const formData = new FormData();
-      if (Platform.OS === 'web') {
-        // Web: fetch blob and append as File for each
-        for (const f of preparedFiles) {
-          try {
-            const resp = await fetch(f.uri);
-            const blob = await resp.blob();
-            const file = new File([blob], f.name, { type: f.type });
-            formData.append('photos[]', file);
-          } catch (e) {
-            console.warn('[ApiService] Web blob append failed:', e);
+      try {
+        const formData = new FormData();
+        if (Platform.OS === 'web') {
+          // Web: fetch blob and append as File for each
+          for (const f of preparedFiles) {
+            try {
+              const resp = await fetch(f.uri);
+              const blob = await resp.blob();
+              const file = new File([blob], f.name, { type: f.type });
+              formData.append('photos[]', file);
+            } catch (e) {
+            }
+          }
+        } else {
+          // Native: append RN file parts
+          for (const f of preparedFiles) {
+            formData.append('photos[]', { uri: f.uri, name: f.name, type: f.type } as any);
           }
         }
-      } else {
-        // Native: append RN file parts
-        for (const f of preparedFiles) {
-          formData.append('photos[]', { uri: f.uri, name: f.name, type: f.type } as any);
+
+        const headers: Record<string, string> = { Accept: 'application/json' };
+        const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-images`;
+        const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
+
+        const text = await uploadResponse.text();
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload fotek selhal: ${uploadResponse.status} - ${text}`);
+        }
+
+        let result: any = {};
+        try { result = JSON.parse(text); } catch { result = { files: [] }; }
+
+        // CRITICAL: Absolutize returned file paths so they can be saved to DB as full HTTP URLs
+        const absolutizedFiles = (result.files || []).map((path: string) => absolutizeUrl(path));
+
+        return { success: true, files: absolutizedFiles };
+      } finally {
+        // Clean up compressed/downloaded temp copies now that the upload request has read them
+        for (const f of tempFiles) {
+          FileSystem.deleteAsync(f, { idempotent: true }).catch(() => {});
         }
       }
-
-      const headers: Record<string, string> = { Accept: 'application/json' };
-      const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-images`;
-      const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
-
-      const text = await uploadResponse.text();
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload fotek selhal: ${uploadResponse.status} - ${text}`);
-      }
-
-      let result: any = {};
-      try { result = JSON.parse(text); } catch { result = { files: [] }; }
-
-      return { success: true, files: result.files || [] };
     } catch (error: any) {
-      console.error('[ApiService] Upload photos error:', error);
       throw error;
     }
   }
@@ -826,6 +897,7 @@ class ApiService {
       const pid = String(purchaseId).trim();
 
       const preparedFiles: { uri: string; name: string; type: string }[] = [];
+      const tempFiles: string[] = []; // downloaded/manipulated copies to clean up after upload
       let index = 0;
       for (const originalUri of photoUris) {
         const filename = `defect_${pid}_${Date.now()}_${index++}.jpg`;
@@ -835,8 +907,8 @@ class ApiService {
           try {
             const dl = await FileSystem.downloadAsync(workUri, downloadPath);
             workUri = dl.uri;
+            tempFiles.push(workUri);
           } catch (e) {
-            console.warn('[ApiService] Remote defect image download failed, skipping:', workUri, e);
             continue;
           }
         }
@@ -849,42 +921,134 @@ class ApiService {
               { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
             );
             localUri = manipulated.uri || workUri;
+            if (localUri !== workUri) tempFiles.push(localUri);
           }
         } catch {}
         preparedFiles.push({ uri: localUri, name: filename, type: 'image/jpeg' });
       }
-      const formData = new FormData();
-      if (Platform.OS === 'web') {
-        for (const f of preparedFiles) {
-          try {
-            const resp = await fetch(f.uri);
-            const blob = await resp.blob();
-            const file = new File([blob], f.name, { type: f.type });
-            formData.append('defect_photos[]', file);
-          } catch (e) {
-            console.warn('[ApiService] Web defect blob append failed:', e);
+      try {
+        const formData = new FormData();
+        if (Platform.OS === 'web') {
+          for (const f of preparedFiles) {
+            try {
+              const resp = await fetch(f.uri);
+              const blob = await resp.blob();
+              const file = new File([blob], f.name, { type: f.type });
+              formData.append('defect_photos[]', file);
+            } catch (e) {
+            }
+          }
+        } else {
+          for (const f of preparedFiles) {
+            formData.append('defect_photos[]', { uri: f.uri, name: f.name, type: f.type } as any);
           }
         }
-      } else {
-        for (const f of preparedFiles) {
-          formData.append('defect_photos[]', { uri: f.uri, name: f.name, type: f.type } as any);
+        const headers: Record<string, string> = { Accept: 'application/json' };
+        const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-defect-images`;
+        const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
+        const text = await uploadResponse.text();
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload fotek vad selhal: ${uploadResponse.status} - ${text}`);
+        }
+        let result: any = {};
+        try { result = JSON.parse(text); } catch { result = { files: [] }; }
+        // CRITICAL: Absolutize returned file paths so they can be saved to DB as full HTTP URLs
+        const absolutizedFiles = (result.files || []).map((path: string) => absolutizeUrl(path));
+        return { success: true, files: absolutizedFiles };
+      } finally {
+        for (const f of tempFiles) {
+          FileSystem.deleteAsync(f, { idempotent: true }).catch(() => {});
         }
       }
-      const headers: Record<string, string> = { Accept: 'application/json' };
-      const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-defect-images`;
-      const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
-      const text = await uploadResponse.text();
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload fotek vad selhal: ${uploadResponse.status} - ${text}`);
-      }
-      let result: any = {};
-      try { result = JSON.parse(text); } catch { result = { files: [] }; }
-      return { success: true, files: result.files || [] };
     } catch (error: any) {
-      console.error('[ApiService] Upload defect photos error:', error);
       throw error;
     }
   }
+
+  /**
+   * Uploaduje úvodní fotku vozidla - SEPARÁTNÍ endpoint
+   * Nedotýká se vehicle/defect fotek - používá jenom cover_photo_uri sloupec
+   */
+  async uploadCoverPhoto(purchaseId: string, photoUri: string): Promise<{ success: boolean; uri: string }> {
+    try {
+      if (!photoUri) {
+        return { success: false, uri: '' };
+      }
+      const pid = String(purchaseId).trim();
+      const filename = `cover_${pid}_${Date.now()}.jpg`;
+      let workUri = photoUri;
+      const tempFiles: string[] = []; // downloaded/manipulated copies to clean up after upload
+
+      // Download remote URLs to cache first
+      if (workUri.startsWith('http://') || workUri.startsWith('https://')) {
+        const downloadPath = `${FileSystem.cacheDirectory}${filename}`;
+        try {
+          const dl = await FileSystem.downloadAsync(workUri, downloadPath);
+          workUri = dl.uri;
+          tempFiles.push(workUri);
+        } catch (e) {
+          throw new Error('Failed to download cover photo');
+        }
+      }
+
+      // Compress to 1600px width (native only)
+      let localUri = workUri;
+      try {
+        if (Platform.OS !== 'web') {
+          const manipulated = await ImageManipulator.manipulateAsync(
+            workUri,
+            [{ resize: { width: 1600 } }],
+            { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
+          );
+          localUri = manipulated.uri || workUri;
+          if (localUri !== workUri) tempFiles.push(localUri);
+        }
+      } catch (e) {
+      }
+
+      try {
+        const formData = new FormData();
+        if (Platform.OS === 'web') {
+          // Web: fetch blob and append as File
+          try {
+            const resp = await fetch(localUri);
+            const blob = await resp.blob();
+            const file = new File([blob], filename, { type: 'image/jpeg' });
+            formData.append('cover_photo', file);
+          } catch (e) {
+            throw new Error('Failed to prepare cover photo for web');
+          }
+        } else {
+          // Native: append RN file part
+          formData.append('cover_photo', { uri: localUri, name: filename, type: 'image/jpeg' } as any);
+        }
+
+        const headers: Record<string, string> = { Accept: 'application/json' };
+        const url = `${API_BASE_URL}/purchases/${encodeURIComponent(pid)}/upload-cover-photo`;
+        const uploadResponse = await fetch(url, { method: 'POST', headers, body: formData });
+
+        const text = await uploadResponse.text();
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload úvodní fotky selhal: ${uploadResponse.status} - ${text}`);
+        }
+
+        let result: any = {};
+        try { result = JSON.parse(text); } catch { result = { uri: '' }; }
+
+        // Absolutize returned file path
+        const absolutizedUri = absolutizeUrl(result.uri || '');
+
+        return { success: true, uri: absolutizedUri };
+      } finally {
+        for (const f of tempFiles) {
+          FileSystem.deleteAsync(f, { idempotent: true }).catch(() => {});
+        }
+      }
+    } catch (error: any) {
+      throw error;
+    }
+  }
+
   /**
    * Smaže fotku z nákupu
    */
@@ -904,7 +1068,6 @@ class ApiService {
       }
 
     } catch (error: any) {
-      console.error('[ApiService] Delete photo error:', error);
       throw error;
     }
   }
@@ -931,6 +1094,9 @@ export const apiService: any = {
   },
   async getPurchases() {
     return new ApiService().getPurchases();
+  },
+  async fetchPurchasesPage(page: number, pageSize: number, search?: string) {
+    return new ApiService().fetchPurchasesPage(page, pageSize, search);
   },
   async getPurchaseById(id: string) {
     return new ApiService().getPurchaseById(id);
@@ -1024,7 +1190,6 @@ export const apiService: any = {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.error('[ApiService] listUsers error:', text);
       throw new Error(`Users list failed: ${res.status}`);
     }
     return res.json();
@@ -1043,7 +1208,6 @@ export const apiService: any = {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.error('[ApiService] syncUser error:', text);
       throw new Error(`Sync user failed: ${res.status}`);
     }
     return res.json();
@@ -1059,7 +1223,6 @@ export const apiService: any = {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.error('[ApiService] getStats error:', text);
       throw new Error(`Stats fetch failed: ${res.status}`);
     }
     return res.json();
@@ -1075,7 +1238,6 @@ export const apiService: any = {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.error('[ApiService] getStatsAll error:', text);
       throw new Error(`All stats fetch failed: ${res.status}`);
     }
     return res.json();
@@ -1088,8 +1250,53 @@ export const apiService: any = {
   async uploadDefectPhotos(purchaseId: string, photoUris: string[]) {
     return new ApiService().uploadDefectPhotos(purchaseId, photoUris);
   },
+  async uploadCoverPhoto(purchaseId: string, photoUri: string) {
+    return new ApiService().uploadCoverPhoto(purchaseId, photoUri);
+  },
   async deletePhoto(purchaseId: string, filename: string) {
     return new ApiService().deletePhoto(purchaseId, filename);
+  },
+
+  // Generic GET method for other endpoints
+  async get(endpoint: string, options?: { params?: Record<string, any> }): Promise<any> {
+    try {
+      let url = `${API_BASE_URL}${endpoint}`;
+      // Add query parameters if provided
+      if (options?.params) {
+        const queryParams = new URLSearchParams();
+        for (const [key, value] of Object.entries(options.params)) {
+          if (value !== undefined && value !== null) {
+            queryParams.append(key, String(value));
+          }
+        }
+        const queryString = queryParams.toString();
+        if (queryString) {
+          url += `?${queryString}`;
+        }
+      }
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+      });
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(`GET ${endpoint} failed: ${response.status} - ${text}`);
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { success: true, raw: text };
+      }
+    } catch (error: any) {
+      throw error;
+    }
   },
 
   // Generic POST method for other endpoints
@@ -1117,8 +1324,116 @@ export const apiService: any = {
         return { success: true, raw: text };
       }
     } catch (error: any) {
-      console.error('[ApiService] POST error:', error);
       throw error;
+    }
+  },
+
+  // Get all companies
+  async getAllCompanies(): Promise<any[]> {
+    try {
+      const url = `${API_BASE_URL}/clients/companies`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const data = await response.json();
+      if (data?.success && Array.isArray(data?.data)) {
+        return data.data;
+      }
+      return [];
+    } catch (error: any) {
+      // Error handled silently
+      return [];
+    }
+  },
+
+  // Get all people
+  async getAllPeople(): Promise<any[]> {
+    try {
+      const url = `${API_BASE_URL}/clients/people`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const data = await response.json();
+      if (data?.success && Array.isArray(data?.data)) {
+        return data.data;
+      }
+      return [];
+    } catch (error: any) {
+      // Error handled silently
+      return [];
+    }
+  },
+
+  // Client history search
+  async searchCompaniesByFulltext(query: string): Promise<any[]> {
+    try {
+      // Když je query prázdný, vrátí všechny firmy
+      if (!query || query.trim().length === 0) {
+        return await this.getAllCompanies();
+      }
+
+      const queryParam = encodeURIComponent(query.trim());
+      const url = `${API_BASE_URL}/clients?type=company&company_name=${queryParam}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const data = await response.json();
+      if (data?.success && Array.isArray(data?.data)) {
+        return data.data;
+      }
+      return [];
+    } catch (error: any) {
+      // Error handled silently
+      return [];
+    }
+  },
+
+  async searchPeopleByFulltext(query: string): Promise<any[]> {
+    try {
+      // Když je query prázdný, vrátí všechny osoby
+      if (!query || query.trim().length === 0) {
+        return await this.getAllPeople();
+      }
+
+      const queryParam = encodeURIComponent(query.trim());
+      const url = `${API_BASE_URL}/clients?type=person&first_name=${queryParam}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const data = await response.json();
+      if (data?.success && Array.isArray(data?.data)) {
+        return data.data;
+      }
+      return [];
+    } catch (error: any) {
+      // Error handled silently
+      return [];
     }
   },
 };

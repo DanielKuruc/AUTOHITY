@@ -1,3 +1,5 @@
+import { REQUIRED_FIELDS, RequiredFieldKey, getRequiredFieldNamesWithContext } from '@/constants/requiredFields';
+
 /**
  * Validation helpers for purchase forms
  */
@@ -8,6 +10,83 @@ export interface ValidationError {
 
 export interface ValidationMessages {
   [key: string]: string;
+}
+
+export interface PurchaseValidationResult {
+  isValid: boolean;
+  errors: ValidationError;
+  messages: ValidationMessages;
+  missingFields: RequiredFieldKey[];
+}
+
+/**
+ * Validates purchase form against required fields (bez kontextu)
+ */
+export function validatePurchaseForm(data: Record<string, any>): PurchaseValidationResult {
+  return validatePurchaseFormWithContext(data, {});
+}
+
+/**
+ * Validates purchase form against required fields s KONTEXTEM
+ * @param data - data z formuláře
+ * @param context - podmínky (np. { registered: true })
+ */
+export function validatePurchaseFormWithContext(
+  data: Record<string, any>,
+  context: Record<string, any> = {}
+): PurchaseValidationResult {
+  const errors: ValidationError = {};
+  const messages: ValidationMessages = {};
+  const missingFields: RequiredFieldKey[] = [];
+
+  // Ziskej seznam povinných polí s ohledem na kontext
+  const requiredFields = getRequiredFieldNamesWithContext(context);
+
+  Object.entries(REQUIRED_FIELDS).forEach(([key, field]) => {
+    const fieldKey = key as RequiredFieldKey;
+    const value = data[fieldKey];
+
+    // Kontrola zda je pole povinné v TOMTO KONTEXTU
+    const isRequiredInContext = requiredFields.includes(fieldKey);
+
+    if (isRequiredInContext) {
+      let isEmpty = false;
+
+      switch (field.type) {
+        case 'text':
+        case 'phone':
+        case 'select':
+          isEmpty = !value || (typeof value === 'string' && !value.trim());
+          break;
+        case 'number':
+          isEmpty = value === null || value === undefined || value === '' || (typeof value === 'number' && isNaN(value));
+          break;
+        case 'datetime':
+        case 'date':
+          isEmpty = !value;
+          break;
+        case 'image':
+          isEmpty = !value || !value.length;
+          break;
+        case 'boolean':
+          isEmpty = value === null || value === undefined;
+          break;
+      }
+
+      if (isEmpty) {
+        errors[fieldKey] = true;
+        messages[fieldKey] = `${field.label} je povinné`;
+        missingFields.push(fieldKey);
+      }
+    }
+  });
+
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors,
+    messages,
+    missingFields,
+  };
 }
 
 /**

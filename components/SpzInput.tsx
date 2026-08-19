@@ -15,7 +15,9 @@ interface SpzInputProps {
  * Standard format: 1A2 3456 (region code + space + numbers)
  * Older format: ABC 12-34
  */
-export const formatSpz = (input: string): string => {
+export const formatSpz = (input: string | null | undefined): string => {
+  if (!input) return '';
+  
   // Remove all non-alphanumeric characters and convert to uppercase
   const cleaned = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
   
@@ -94,8 +96,8 @@ export function SpzInput({ label, value, onChangeText, placeholder, error = fals
 /**
  * Display-only formatted SPZ with Czech flag badge
  */
-export function formatSpzDisplay(spz?: string): string | null {
-  if (!spz) return null;
+export function formatSpzDisplay(spz?: string): string {
+  if (!spz) return '';
   return formatSpz(spz);
 }
 

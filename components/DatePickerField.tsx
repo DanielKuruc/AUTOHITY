@@ -72,7 +72,6 @@ export function DatePickerField({
       setSelectedMonth(month);
       setSelectedYear(year);
 
-      console.log('[DatePicker] Parsed value:', { day, month, year });
     }
     if (value && includeTime) {
       const timePart = value.split(' ')[1];
@@ -82,6 +81,7 @@ export function DatePickerField({
         setSelectedMinute(parseInt(timeParts[1], 10) || 0);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, showPicker]); // Trigger when value changes OR picker opens
 
   // Scroll to selected values when picker opens (happens AFTER parsing)
@@ -110,7 +110,6 @@ export function DatePickerField({
         const hourOffset = selectedHour * itemHeight - 60 / 2 + itemHeight / 2;
         const minuteOffset = (selectedMinute / 5) * itemHeight - 60 / 2 + itemHeight / 2;
 
-        console.log('[DatePicker] Scroll offsets:', { day, month, year, yearIdx, minYear, yearOffset, itemHeight });
 
         dayScrollRef.current?.scrollTo({ y: dayOffset, animated: false });
         monthScrollRef.current?.scrollTo({ y: monthOffset, animated: false });
@@ -123,6 +122,7 @@ export function DatePickerField({
 
       return () => clearTimeout(timer);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPicker]);
   const days = Array.from({ length: 31 }, (_, i) => i + 1);
   const months = [

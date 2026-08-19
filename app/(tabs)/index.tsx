@@ -1,5 +1,7 @@
 import { NewPurchaseModal, PurchaseInitData } from '@/components/NewPurchaseModal';
 import { PurchaseCard } from '@/components/PurchaseCard';
+import { ScreenHeader } from '@/components/ScreenHeader';
+import { SidebarBrand } from '@/components/SidebarBrand';
 import { SidebarUserSection } from '@/components/SidebarUserSection';
 import { Purchase } from '@/constants/types';
 import { useAuth } from '@/contexts/AuthContext';
@@ -12,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   RefreshControl,
   ScrollView,
@@ -28,39 +31,46 @@ export default function PurchasesScreen() {
   const { showToast } = useToast();
   const { refreshUsers } = useUsers();
   const { gridColumns, isTablet, isSplitView } = useTabletLayout();
-  const { 
-    filteredPurchases, 
-    filter, 
-    refreshing, 
+  const {
+    filteredPurchases,
+    filter,
+    refreshing,
     refreshPurchases,
     setInitData,
     pendingUploads,
-    retryUpload
+    retryUpload,
+    isLoadingMore,
+    hasMore,
+    loadMorePurchases,
+    searchQuery,
+    setSearchQuery,
+    isSearching,
+    loadError
   } = usePurchases();
 
   const [showNewPurchaseModal, setShowNewPurchaseModal] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const { users } = useUsers();
   const { user: currentUser } = useAuth();
 
   // Refresh users seznam když se screen focusne (např. po přihlášení)
   useFocusEffect(
     React.useCallback(() => {
-      console.log('[Purchases] Screen focused - refreshing users list');
-      refreshUsers().catch(err => console.error('[Purchases] Failed to refresh users:', err));
     }, []) // Empty dependency - refreshUsers je stabilní funkce z kontextu
   );
 
   // Get user name for display
-  const userName = user?.firstName && user?.lastName 
+  const userName = user?.firstName && user?.lastName
     ? `${user.firstName} ${user.lastName}`
     : user?.userName || 'Přihlášený uživatel';
 
-  // Filtrování podle vyhledávání
+  // Hledání probíhá na serveru (viz PurchaseContext), tady už jen spojíme
+  // rozpracované uploady s tím, co přišlo z API. Během hledání je neukazujeme,
+  // aby neplavaly v nesouvisejících výsledcích.
   const searchedPurchases = useMemo(() => {
-    // Combine pending uploads with filtered purchases
-    const allPurchases = [
+    if (searchQuery.trim()) return filteredPurchases;
+
+    return [
       ...pendingUploads.map(p => ({
         ...p.purchase,
         __pending: true,
@@ -70,21 +80,15 @@ export default function PurchasesScreen() {
       })),
       ...filteredPurchases
     ];
-
-    if (!searchQuery.trim()) return allPurchases;
-
-    const query = searchQuery.toLowerCase();
-    return allPurchases.filter(purchase => 
-      purchase.clientName.toLowerCase().includes(query) ||
-      purchase.spz.toLowerCase().includes(query) ||
-      purchase.carDetails?.make?.toLowerCase().includes(query) ||
-      purchase.carDetails?.model?.toLowerCase().includes(query) ||
-      purchase.carDetails?.vin?.toLowerCase().includes(query) ||
-      purchase.notes?.toLowerCase().includes(query)
-    );
   }, [filteredPurchases, searchQuery, pendingUploads]);
   const handleFilterPress = () => {
     router.push('/filters');
+  };
+
+  const toggleSearch = () => {
+    // Při zavření vyčistíme dotaz, ať nezůstane viset skrytý filtr
+    if (showSearch) setSearchQuery('');
+    setShowSearch(!showSearch);
   };
 
   const handleNewPurchasePress = () => {
@@ -92,8 +96,19 @@ export default function PurchasesScreen() {
   };
 
   const handleCreatePurchase = (data: PurchaseInitData) => {
+    console.log('handleCreatePurchase - data from modal:', {
+      vin: data.vin,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      companyName: data.companyName,
+      ico: data.ico,
+      isCompany: data.isCompany,
+      companyData: data.companyData,
+    });
     setInitData(data);
     setShowNewPurchaseModal(false);
+    // Navigate to new-purchase root, let index.tsx load the data into context
+    // Then user can switch to automobil tab
     router.push('/new-purchase');
   };
 
@@ -124,63 +139,88 @@ export default function PurchasesScreen() {
   const activeFiltersCount = getActiveFiltersCount();
 
   const renderPurchase = ({ item }: { item: Purchase }) => (
-    <PurchaseCard 
-      purchase={item} 
+    <PurchaseCard
+      purchase={item}
+      isPending={(item as any).__pending}
+      progress={(item as any).__progress || 0}
+      status={(item as any).__status}
       onRetry={(id: string) => retryUpload(id)}
     />
   );
 
-  const renderEmptyState = () => (
-    <View style={[styles.emptyState, { backgroundColor: theme.background }]}>
-      <Ionicons name="layers-outline" size={48} color={theme.textTertiary} />
-      <Text style={[styles.emptyTitle, { color: theme.text }]}>Žádné výkupy</Text>
-      <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>
-        Vytvořte nový výkup nebo si prohlédněte historii
-      </Text>
-    </View>
-  );
+  const renderEmptyState = () => {
+    if (isSearching) {
+      return (
+        <View style={[styles.emptyState, { backgroundColor: theme.background }]}>
+          <ActivityIndicator color={theme.accent} />
+          <Text style={[styles.emptySubtitle, { color: theme.textSecondary, marginTop: 16 }]}>
+            Hledám...
+          </Text>
+        </View>
+      );
+    }
+
+    if (loadError) {
+      return (
+        <View style={[styles.emptyState, { backgroundColor: theme.background }]}>
+          <Ionicons name="cloud-offline-outline" size={48} color={theme.textTertiary} />
+          <Text style={[styles.emptyTitle, { color: theme.text }]}>Načtení se nezdařilo</Text>
+          <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>{loadError}</Text>
+          <TouchableOpacity onPress={refreshPurchases}>
+            <Text style={[styles.emptySubtitle, { color: theme.accent }]}>Zkusit znovu</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (searchQuery.trim()) {
+      return (
+        <View style={[styles.emptyState, { backgroundColor: theme.background }]}>
+          <Ionicons name="search-outline" size={48} color={theme.textTertiary} />
+          <Text style={[styles.emptyTitle, { color: theme.text }]}>Nic nenalezeno</Text>
+          <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>
+            Pro „{searchQuery.trim()}“ nemáme žádný výkup
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={[styles.emptyState, { backgroundColor: theme.background }]}>
+        <Ionicons name="layers-outline" size={48} color={theme.textTertiary} />
+        <Text style={[styles.emptyTitle, { color: theme.text }]}>Žádné výkupy</Text>
+        <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>
+          Vytvořte nový výkup nebo si prohlédněte historii
+        </Text>
+      </View>
+    );
+  };
+
+  const renderLoadingFooter = () => {
+    if (!isLoadingMore) return null;
+    return (
+      <View style={[styles.loadingFooter, { backgroundColor: theme.background }]}>
+        <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Načítám více výkupů...</Text>
+      </View>
+    );
+  };
+
+  const handleEndReached = () => {
+    if (hasMore && !isLoadingMore) {
+      loadMorePurchases();
+    }
+  };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={[isSplitView ? styles.splitLayout : styles.stackedLayout]}>
         {/* LEFT SIDEBAR - TABLET ONLY */}
         {isSplitView && (
           <View style={[styles.sidebar, { backgroundColor: theme.surface, borderRightColor: theme.border }]}>
+            <SidebarBrand />
+
             <ScrollView style={styles.sidebarScroll} showsVerticalScrollIndicator={false}>
-              <TouchableOpacity 
-                style={[styles.sidebarItem, { backgroundColor: theme.accent }]}
-                onPress={handleNewPurchasePress}
-              >
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <Text style={styles.sidebarItemText}>Nový výkup</Text>
-              </TouchableOpacity>
-
-              <View style={[styles.sidebarDivider, { backgroundColor: theme.border }]} />
-
-              <TouchableOpacity 
-                style={styles.sidebarNavItem}
-                onPress={() => setShowSearch(!showSearch)}
-              >
-                <Ionicons name="search" size={20} color={theme.textSecondary} />
-                <Text style={[styles.sidebarNavItemText, { color: theme.text }]}>Hledat</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={styles.sidebarNavItem}
-                onPress={handleFilterPress}
-              >
-                <Ionicons name="funnel" size={20} color={activeFiltersCount > 0 ? theme.accent : theme.textSecondary} />
-                <Text style={[
-                  styles.sidebarNavItemText,
-                  { color: activeFiltersCount > 0 ? theme.accent : theme.text }
-                ]}>
-                  {activeFiltersCount > 0 ? `Filtry (${activeFiltersCount})` : 'Filtry'}
-                </Text>
-              </TouchableOpacity>
-
-              <View style={[styles.sidebarDivider, { backgroundColor: theme.border }]} />
-
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[styles.sidebarNavItem, { backgroundColor: theme.accent }]}
                 onPress={() => router.push('/(tabs)')}
               >
@@ -188,7 +228,7 @@ export default function PurchasesScreen() {
                 <Text style={[styles.sidebarNavItemText, { color: '#FFFFFF' }]}>Výkupy</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.sidebarNavItem}
                 onPress={() => router.push('/(tabs)/statistiky')}
               >
@@ -197,7 +237,7 @@ export default function PurchasesScreen() {
               </TouchableOpacity>
 
               {users.find(u => u.id === currentUser?.id)?.isAdmin && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.sidebarNavItem}
                   onPress={() => router.push('/(tabs)/reporty')}
                 >
@@ -206,7 +246,7 @@ export default function PurchasesScreen() {
                 </TouchableOpacity>
               )}
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.sidebarNavItem}
                 onPress={() => router.push('/(tabs)/notifications')}
               >
@@ -223,70 +263,103 @@ export default function PurchasesScreen() {
         {/* RIGHT CONTENT */}
         <View style={{ flex: 1 }}>
           {/* Header */}
-          <View style={[styles.header, { borderBottomColor: theme.border }]}>
-            <View style={styles.headerContent}>
-              <View style={styles.headerLeft}>
-                <Text style={[styles.title, { color: theme.text }]}>AUTOHITY</Text>
-              </View>
+          <ScreenHeader
+            title="Výkupy"
+            actions={
+              <>
+                {/* Header actions - TABLET ONLY (ikona + text) */}
+                {isSplitView && (
+                  <View style={styles.headerActionsTablet}>
+                    <TouchableOpacity
+                      style={[styles.headerActionButton, { backgroundColor: theme.inputBackground }]}
+                      onPress={toggleSearch}
+                    >
+                      <Ionicons name="search" size={20} color={theme.text} />
+                      <Text style={[styles.headerActionText, { color: theme.text }]}>Hledat</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.headerActionButton, { backgroundColor: theme.inputBackground }]}
+                      onPress={handleFilterPress}
+                    >
+                      <Ionicons
+                        name={activeFiltersCount > 0 ? 'funnel' : 'funnel-outline'}
+                        size={20}
+                        color={activeFiltersCount > 0 ? theme.accent : theme.text}
+                      />
+                      <Text style={[
+                        styles.headerActionText,
+                        { color: activeFiltersCount > 0 ? theme.accent : theme.text }
+                      ]}>
+                        {activeFiltersCount > 0 ? `Filtry (${activeFiltersCount})` : 'Filtry'}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.headerActionButton, { backgroundColor: theme.accent }]}
+                      onPress={handleNewPurchasePress}
+                    >
+                      <Ionicons name="add" size={20} color="#FFFFFF" />
+                      <Text style={[styles.headerActionText, { color: '#FFFFFF' }]}>Nový výkup</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
-              {/* Header actions - PHONE ONLY */}
-              {!isSplitView && (
-                <View style={styles.headerActions}>
-                  <TouchableOpacity 
-                    style={[styles.iconButton, { backgroundColor: theme.headerButtonBackground }]} 
-                    onPress={() => setShowSearch(!showSearch)}
-                  >
-                    <Ionicons name="search" size={20} color={theme.headerButtonText} />
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[
-                      styles.iconButton, 
-                      { backgroundColor: activeFiltersCount > 0 ? theme.accent : theme.headerButtonBackground }
-                    ]} 
-                    onPress={handleFilterPress}
-                  >
-                    <Ionicons 
-                      name="funnel" 
-                      size={20} 
-                      color={activeFiltersCount > 0 ? '#FFFFFF' : theme.headerButtonText} 
-                    />
-                    {activeFiltersCount > 0 && (
-                      <View style={styles.filterBadge}>
-                        <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.addButton, { backgroundColor: theme.accent }]} 
-                    onPress={handleNewPurchasePress}
-                  >
-                    <Ionicons name="add" size={20} color="#FFFFFF" />
-                  </TouchableOpacity>
+                {/* Header actions - PHONE ONLY */}
+                {!isSplitView && (
+                  <View style={styles.headerActions}>
+                    <TouchableOpacity
+                      style={styles.iconButtonPlain}
+                      onPress={toggleSearch}
+                    >
+                      <Ionicons name="search" size={22} color={theme.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.iconButtonPlain}
+                      onPress={handleFilterPress}
+                    >
+                      <Ionicons
+                        name={activeFiltersCount > 0 ? 'funnel' : 'funnel-outline'}
+                        size={22}
+                        color={activeFiltersCount > 0 ? theme.accent : theme.text}
+                      />
+                      {activeFiltersCount > 0 && (
+                        <View style={[styles.filterBadge, { borderColor: theme.background }]}>
+                          <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.addButton, { backgroundColor: theme.accent }]}
+                      onPress={handleNewPurchasePress}
+                    >
+                      <Ionicons name="add" size={20} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </>
+            }
+          >
+              {/* Search Bar */}
+              {showSearch && (
+                <View style={[styles.searchContainer, { backgroundColor: theme.inputBackground }]}>
+                  <Ionicons name="search" size={18} color={theme.textTertiary} />
+                  <TextInput
+                    style={[styles.searchInput, { color: theme.text }]}
+                    placeholder="Hledat v historii výkupů..."
+                    placeholderTextColor={theme.textTertiary}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    autoFocus
+                    returnKeyType="search"
+                  />
+                  {isSearching && <ActivityIndicator size="small" color={theme.textTertiary} />}
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                      <Ionicons name="close-circle" size={18} color={theme.textTertiary} />
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
-            </View>
-
-            {/* Search Bar */}
-            {showSearch && (
-              <View style={[styles.searchContainer, { backgroundColor: theme.inputBackground }]}>
-                <Ionicons name="search" size={18} color={theme.textTertiary} />
-                <TextInput
-                  style={[styles.searchInput, { color: theme.text }]}
-                  placeholder="Hledat v historii výkupů..."
-                  placeholderTextColor={theme.textTertiary}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  autoFocus
-                  returnKeyType="search"
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color={theme.textTertiary} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-          </View>
+          </ScreenHeader>
 
           {/* Purchases List - Multi-column on tablet */}
           <FlatList
@@ -303,8 +376,11 @@ export default function PurchasesScreen() {
               gridColumns > 1 && { paddingHorizontal: 0 }
             ]}
             ListEmptyComponent={renderEmptyState}
+            ListFooterComponent={renderLoadingFooter}
             scrollEnabled={true}
             nestedScrollEnabled={false}
+            onEndReached={handleEndReached}
+            onEndReachedThreshold={0.8}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -343,27 +419,14 @@ const styles = StyleSheet.create({
   sidebar: {
     width: 220,
     borderRightWidth: 1,
+    paddingVertical: 16,
     paddingHorizontal: 12,
-    paddingBottom: 0,
     flexDirection: 'column',
   },
   sidebarScroll: {
     flex: 1,
     paddingTop: 16,
     paddingBottom: 8,
-  },
-  sidebarItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 12,
-  },
-  sidebarItemText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FFFFFF',
   },
   sidebarNavItem: {
     flexDirection: 'row',
@@ -372,32 +435,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
     gap: 12,
+    marginHorizontal: 4,
+    marginVertical: 4,
   },
   sidebarNavItemText: {
     fontSize: 14,
     fontWeight: '500',
-  },
-  sidebarDivider: {
-    height: 1,
-    marginVertical: 8,
-  },
-  header: {
-    borderBottomWidth: 1,
-  },
-  headerContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-  headerLeft: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 2,
   },
   textSecondary: {
     fontSize: 14,
@@ -406,38 +449,56 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
+  },
+  headerActionsTablet: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
-  iconButton: {
+  headerActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  headerActionText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  iconButtonPlain: {
     width: 40,
     height: 40,
-    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
   filterBadge: {
     position: 'absolute',
-    top: -2,
-    right: -2,
+    top: 2,
+    right: 2,
     width: 16,
     height: 16,
     borderRadius: 8,
+    borderWidth: 2,
     backgroundColor: '#FF3B30',
     alignItems: 'center',
     justifyContent: 'center',
   },
   filterBadgeText: {
     color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 9,
+    fontWeight: '700',
   },
   addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: 6,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -481,5 +542,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 24,
+  },
+  loadingFooter: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    fontSize: 14,
+    fontWeight: '500',
   },
 });

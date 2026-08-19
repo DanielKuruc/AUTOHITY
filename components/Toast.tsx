@@ -1,8 +1,9 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useToast, Toast as ToastType } from '@/contexts/ToastContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TOAST_COLORS = {
   success: { bg: '#34C759', icon: 'checkmark-circle', text: '#FFFFFF' },
@@ -13,13 +14,17 @@ const TOAST_COLORS = {
 
 export function ToastContainer() {
   const { toasts, hideToast } = useToast();
+  const insets = useSafeAreaInsets();
 
   return (
-    <SafeAreaView style={styles.container} pointerEvents="box-none">
+    <View 
+      style={[styles.container, { paddingBottom: insets.bottom + 12 }]} 
+      pointerEvents="box-none"
+    >
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={() => hideToast(toast.id)} />
       ))}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -56,7 +61,7 @@ const styles = StyleSheet.create({
   },
   toastWrapper: {
     paddingHorizontal: 12,
-    paddingBottom: 12,
+    paddingBottom: 8,
   },
   toast: {
     flexDirection: 'row',

@@ -1,3 +1,5 @@
+import { ScreenHeader } from '@/components/ScreenHeader';
+import { SidebarBrand } from '@/components/SidebarBrand';
 import { SidebarUserSection } from '@/components/SidebarUserSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -5,9 +7,10 @@ import { useUsers } from '@/contexts/UsersContext';
 import { useTabletLayout } from '@/hooks/useTabletLayout';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React, { useEffect } from 'react';
-import { Alert, ScrollView as RNScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ScrollView as RNScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { showAlert } from '@/utils/alert';
 
 export default function ProfileScreen() {
   const { user, userStats, loadUserProfile, loadUserStats, isLoading: authLoading, logout } = useAuth();
@@ -17,44 +20,34 @@ export default function ProfileScreen() {
   const { user: currentUser } = useAuth();
 
   useEffect(() => {
-    console.log('[Profile] Loading profile...');
     loadUserProfile();
     loadUserStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleLogout = () => {
-    Alert.alert('Odhlášení', 'Opravdu se chcete odhlásit?', [
+    showAlert('Odhlášení', 'Opravdu se chcete odhlásit?', [
       { text: 'Ne', style: 'cancel' },
       {
         text: 'Ano',
         style: 'destructive',
         onPress: async () => {
-          console.log('[Profile] Logging out...');
           await logout();
           // AuthGate se automaticky postará o navigaci na LoginScreen
-          console.log('[Profile] Logout complete');
         },
       },
     ]);
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={[isSplitView ? styles.splitLayout : styles.stackedLayout]}>
         {/* LEFT SIDEBAR - TABLET ONLY */}
         {isSplitView && (
           <View style={[styles.sidebar, { backgroundColor: theme.surface, borderRightColor: theme.border }]}>
+            <SidebarBrand />
+
             <RNScrollView style={styles.sidebarScroll} showsVerticalScrollIndicator={false}>
-              <TouchableOpacity 
-                style={[styles.sidebarItem, { backgroundColor: theme.accent }]}
-                onPress={() => router.push('/(tabs)')}
-              >
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <Text style={styles.sidebarItemText}>Nový výkup</Text>
-              </TouchableOpacity>
-
-              <View style={[styles.sidebarDivider, { backgroundColor: theme.border }]} />
-
               <TouchableOpacity 
                 style={[styles.sidebarNavItem, { backgroundColor: theme.inputBackground }]}
                 onPress={() => router.push('/(tabs)')}
@@ -97,12 +90,10 @@ export default function ProfileScreen() {
 
         {/* CONTENT */}
         <View style={{ flex: 1 }}>
-          <RNScrollView style={styles.scroll}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: theme.text }]}>Profil</Text>
-        </View>
+          {/* Header */}
+          <ScreenHeader title="Profil" />
 
+          <RNScrollView style={styles.scroll}>
         {/* User Info Card */}
         <View style={[styles.card, { backgroundColor: theme.card }]}>
           <View style={styles.userHeader}>
@@ -157,20 +148,20 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Admin Testing Section */}
+        {/* Admin Card */}
         {users.find(u => u.id === currentUser?.id)?.isAdmin && (
-          <View style={[styles.card, { backgroundColor: theme.card, borderLeftColor: '#FF9500', borderLeftWidth: 4 }]}>
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>🧪 Admin Tools</Text>
+          <View style={[styles.card, { backgroundColor: theme.card }]}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Administrace</Text>
             <TouchableOpacity
               style={[styles.adminButton, { backgroundColor: theme.accent }]}
-              onPress={() => router.push('/push-test')}
+              onPress={() => router.push('/admin/catalog')}
             >
-              <Ionicons name="notifications" size={18} color="#FFFFFF" />
-              <Text style={styles.adminButtonText}>Testování notifikací</Text>
+              <Ionicons name="list" size={20} color="#FFFFFF" />
+              <Text style={styles.adminButtonText}>Číselník značek a modelů</Text>
               <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
             </TouchableOpacity>
             <Text style={[styles.helperText, { color: theme.textSecondary, marginTop: 8 }]}>
-              Testuj in-app notifikace a push API
+              Přidávejte/upravujte značky a modely vozidel pro rozpoznávání z VIN.
             </Text>
           </View>
         )}
@@ -207,20 +198,6 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 12,
   },
-  sidebarItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 12,
-    marginHorizontal: 4,
-  },
-  sidebarItemText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
   sidebarNavItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -235,10 +212,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  sidebarDivider: {
-    height: 1,
-    marginVertical: 8,
-  },
   sidebarScroll: {
     flex: 1,
     paddingTop: 16,
@@ -247,14 +220,6 @@ const styles = StyleSheet.create({
   scroll: {
     flex: 1,
     padding: 16,
-  },
-  header: {
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    letterSpacing: -0.3,
   },
   card: {
     borderRadius: 12,

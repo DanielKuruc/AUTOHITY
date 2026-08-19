@@ -6,7 +6,6 @@
   "icon": "./assets/images/autohity-logo.png",
   "scheme": "autohity",
   "userInterfaceStyle": "automatic",
-  "newArchEnabled": true,
   "ios": {
     "supportsTablet": true,
     "infoPlist": {
@@ -21,7 +20,6 @@
       "foregroundImage": "./assets/images/adaptive-icon.png",
       "backgroundColor": "#ffffff"
     },
-    "edgeToEdgeEnabled": true,
     "permissions": [
       "android.permission.CAMERA",
       "android.permission.READ_EXTERNAL_STORAGE",
@@ -48,10 +46,16 @@
     [
       "expo-splash-screen",
       {
-        "image": "./assets/images/splash-icon.png",
-        "imageWidth": 200,
+        "image": "./assets/images/autohity-logo.png",
+        "imageWidth": 220,
         "resizeMode": "contain",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#F0F0F0",
+        "dark": {
+          "image": "./assets/images/autohity-logo.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#F0F0F0"
+        }
       }
     ],
     [
@@ -65,7 +69,12 @@
       {
         "photosPermission": "Povolte aplikaci AUTOHITY - Výkup přístup k fotogalerii, aby mohla vybírat fotografie vozidel během vytváření výkupů."
       }
-    ]
+    ],
+    "expo-font",
+    "expo-image",
+    "expo-sharing",
+    "expo-web-browser",
+    "expo-status-bar"
   ],
   "experiments": {
     "typedRoutes": true

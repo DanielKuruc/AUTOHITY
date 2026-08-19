@@ -1,4 +1,4 @@
-import { apiService } from '@/services/apiService';
+import { apiService, setGlobalJwtToken } from '@/services/apiService';
 import { authApiService } from '@/services/authApiService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
@@ -35,6 +35,8 @@ interface AuthContextType {
   loadUserProfile: () => Promise<void>;
   loadUserStats: () => Promise<void>;
   loadAllStats: () => Promise<void>;
+  loadUserStatsFiltered: (startDate?: string, endDate?: string) => Promise<UserStats | null>;
+  loadAllStatsFiltered: (startDate?: string, endDate?: string) => Promise<UserStats | null>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
 }
 
@@ -60,9 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const { user: storedUser, token: storedToken } = JSON.parse(stored);
             setUser(storedUser);
             setJwtToken(storedToken);
+            setGlobalJwtToken(storedToken);
             setIsAuthenticated(true);
           } catch (parseErr) {
-            console.error('[Auth] ❌ Failed to parse stored session:', parseErr);
             await AsyncStorage.removeItem(STORAGE_KEY);
           }
         } else {
@@ -70,7 +72,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // VŽDY nastav isLoading na false když je init hotový
         setIsLoading(false);
       } catch (err) {
-        console.error('[Auth] ❌ Initialization error:', err);
         if (isMounted) {
           setIsLoading(false);
         }
@@ -84,6 +85,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (userName: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      const demoUser = process.env.EXPO_PUBLIC_DEMO_USERNAME;
+      const demoPass = process.env.EXPO_PUBLIC_DEMO_PASSWORD;
+      console.log('[DEBUG] demoUser defined:', !!demoUser, '| demoPass defined:', !!demoPass, '| match:', userName === demoUser, password === demoPass);
+      if (demoUser && demoPass && userName === demoUser && password === demoPass) {
+        const userData: User = {
+          id: '0',
+          userName: 'demo',
+          email: 'demo@autohity.cz',
+          firstName: 'Demo',
+          lastName: 'Uživatel',
+        };
+        setUser(userData);
+        setJwtToken('demo-token');
+        setGlobalJwtToken('demo-token');
+        setIsAuthenticated(true);
+        await AsyncStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ user: userData, token: 'demo-token' })
+        );
+        return { success: true };
+      }
+
       const loginResponse = await authApiService.login(userName, password);
 
       const userData: User = {
@@ -96,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setUser(userData);
       setJwtToken(loginResponse.token);
+      setGlobalJwtToken(loginResponse.token);
       setIsAuthenticated(true);
 
       // Ulož session
@@ -108,7 +132,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await loadUserProfile();
       } catch (profileError) {
-        console.error('[Auth] Failed to load profile:', profileError);
         // Nepretrhávej login - profil není kritický
       }
 
@@ -120,13 +143,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           userData.lastName || ''
         );
       } catch (syncError) {
-        console.error('[Auth] Failed to sync user to DB:', syncError);
         // Nepretrhávej login - sync selhání není kritické
       }
 
       return { success: true };
     } catch (error: any) {
-      console.error('[Auth] Login error:', error.message);
       return { success: false, error: error.message || 'Přihlášení se nezdařilo' };
     }
   };
@@ -140,15 +161,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthenticated(false);
       setUser(null);
       setJwtToken(null);
+      setGlobalJwtToken(null);
       setUserStats(null);
       setAllStats(null);
       // isLoading zůstane false - nechceme se vrátit na loading screen
     } catch (err) {
-      console.error('[Auth] Logout error:', err);
       // I při erroru resetuj auth state
       setIsAuthenticated(false);
       setUser(null);
       setJwtToken(null);
+      setGlobalJwtToken(null);
     }
   };
 
@@ -170,8 +192,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return updated;
       });
     } catch (err) {
-      console.error('[Auth] Profile load error:', err);
-      throw err;
+      // Profil (jméno/telefon) není kritický - typicky selže jen když session token
+      // mezitím vypršel. Nechceme kvůli tomu appku shodit na unhandled rejection,
+      // stávající (uložená) data uživatele zůstanou beze změny.
     }
   };
 
@@ -192,7 +215,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('[Auth] Stats response error text:', errorText);
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
@@ -206,7 +228,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           cancelled: data.data.cancelled || 0,
         });
       } else {
-        console.warn('[Auth] Stats response not successful or missing data field');
         setUserStats({
           total: 0,
           new: 0,
@@ -216,7 +237,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch (err) {
-      console.error('[Auth] Load personal stats error:', err);
       setUserStats({
         total: 0,
         new: 0,
@@ -240,7 +260,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('[Auth] All stats response error text:', errorText);
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
@@ -254,7 +273,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           cancelled: data.data.cancelled || 0,
         });
       } else {
-        console.warn('[Auth] All stats response not successful or missing data field');
         setAllStats({
           total: 0,
           new: 0,
@@ -264,7 +282,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch (err) {
-      console.error('[Auth] Load company stats error:', err);
       setAllStats({
         total: 0,
         new: 0,
@@ -275,13 +292,81 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const loadUserStatsFiltered = async (startDate?: string, endDate?: string): Promise<UserStats | null> => {
+    if (!user?.id) {
+      return null;
+    }
+
+    try {
+      let url = `https://autohity.cz/php-api/purchases/stats/filtered?userId=${user.id}`;
+      if (startDate) url += `&startDate=${startDate}`;
+      if (endDate) url += `&endDate=${endDate}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success && data.data) {
+        return {
+          total: data.data.total || 0,
+          new: data.data.new || 0,
+          inProgress: data.data.inProgress || 0,
+          completed: data.data.completed || 0,
+          cancelled: data.data.cancelled || 0,
+        };
+      }
+      return null;
+    } catch (err) {
+      return null;
+    }
+  };
+
+  const loadAllStatsFiltered = async (startDate?: string, endDate?: string): Promise<UserStats | null> => {
+    try {
+      let url = 'https://autohity.cz/php-api/purchases/stats/filtered/all';
+      if (startDate) url += `?startDate=${startDate}`;
+      if (endDate) url += (startDate ? '&' : '?') + `endDate=${endDate}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success && data.data) {
+        return {
+          total: data.data.total || 0,
+          new: data.data.new || 0,
+          inProgress: data.data.inProgress || 0,
+          completed: data.data.completed || 0,
+          cancelled: data.data.cancelled || 0,
+        };
+      }
+      return null;
+    } catch (err) {
+      return null;
+    }
+  };
+
   const changePassword = async (oldPassword: string, newPassword: string): Promise<boolean> => {
     try {
       // TODO: Implement password change when API endpoint is available
-      console.warn('[Auth] Password change not yet implemented');
       return false;
     } catch (err) {
-      console.error('[Auth] Change password error:', err);
       return false;
     }
   };
@@ -300,6 +385,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loadUserProfile,
         loadUserStats,
         loadAllStats,
+        loadUserStatsFiltered,
+        loadAllStatsFiltered,
         changePassword,
       }}
     >

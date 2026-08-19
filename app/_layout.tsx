@@ -1,22 +1,26 @@
-import { NotificationToast } from '@/components/NotificationCenter';
-import { ToastContainer } from '@/components/Toast';
-import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { NotificationProvider, useNotifications } from '@/contexts/NotificationContext';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvider, router } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { PurchaseProvider } from '@/contexts/PurchaseContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
-import { ToastProvider } from '@/contexts/ToastContext';
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { UsersProvider } from '@/contexts/UsersContext';
-import { initializePushNotifications, setupNotificationListeners } from '@/services/pushNotifications';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFonts } from 'expo-font';
-import * as Notifications from 'expo-notifications';
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-import { ActivityIndicator, AppState, AppStateStatus, StyleSheet, View } from 'react-native';
+import { ToastProvider, useToast } from '@/contexts/ToastContext';
+import { NotificationProvider, useNotifications } from '@/contexts/NotificationContext';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { StyleSheet, View, ActivityIndicator, AppState, AppStateStatus, Platform } from 'react-native';
 import LoginScreen from './login';
+import * as SplashScreen from 'expo-splash-screen';
+import { useFonts } from 'expo-font';
+import { useEffect, useRef } from 'react';
+import { ToastContainer } from '@/components/Toast';
+import {
+  setupNotificationListeners,
+  initializePushNotifications,
+  getPurchaseIdFromNotification,
+} from '@/services/pushNotifications';
+import * as Notifications from 'expo-notifications';
+import * as ImagePicker from 'expo-image-picker';
+import { purgeOrphanCacheFiles } from '@/utils/cacheCleanup';
 SplashScreen.preventAutoHideAsync();
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -38,13 +42,61 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Klepnutí na push notifikaci otevře konkrétní výkup.
+ *
+ * `useLastNotificationResponse` pokrývá i studený start - když je aplikace
+ * zavřená, klepnutí ji teprve nastartuje a odpověď je k dispozici hned po
+ * mountu (běžný listener by se do té doby nestihl zaregistrovat).
+ *
+ * Je to samostatná komponenta, protože ten hook sahá na nativní modul, který
+ * na webu neexistuje. Hooky nejde volat podmíněně, ale komponentu jde podmíněně
+ * vykreslit - na webu se proto nenamountuje vůbec.
+ */
+function PushNotificationNavigator({ userId }: { userId?: string }) {
+  const lastNotificationResponse = Notifications.useLastNotificationResponse();
+  const handledNotificationRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Na uživatele čekáme proto, že dokud není přihlášený, překrývá obsah
+    // AuthGate a navigace by se ztratila - po přihlášení efekt doběhne znovu.
+    if (!lastNotificationResponse || !userId) return;
+
+    // Stejnou odpověď vrací hook opakovaně, tak si pamatujeme, co už jsme otevřeli
+    const notificationId = lastNotificationResponse.notification.request.identifier;
+    if (handledNotificationRef.current === notificationId) return;
+
+    const purchaseId = getPurchaseIdFromNotification(lastNotificationResponse.notification);
+    if (!purchaseId) return;
+
+    handledNotificationRef.current = notificationId;
+    router.push(`/purchase/${purchaseId}`);
+  }, [lastNotificationResponse, userId]);
+
+  return null;
+}
+
 function RootLayoutContent() {
   const { isDark } = useTheme();
   const { user } = useAuth();
-  const { addFromPushNotification, notifications } = useNotifications();
+  const { showToast } = useToast();
+  const { addNotification } = useNotifications();
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
+
+  // Request camera and gallery permissions on app startup
+  const requestMediaPermissions = async () => {
+    try {
+      // Request camera permissions
+      await ImagePicker.requestCameraPermissionsAsync();
+      
+      // Request media library permissions
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+    } catch (error) {
+      // Error requesting media permissions - silent fail
+    }
+  };
 
   // Hide splash screen
   useEffect(() => {
@@ -53,11 +105,17 @@ function RootLayoutContent() {
     });
   }, []);
 
+  // Clean up orphaned temp photos/PDFs left behind by crashes or older app versions
+  useEffect(() => {
+    purgeOrphanCacheFiles();
+  }, []);
+
   // Clear badge when app becomes active
   useEffect(() => {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
     return () => subscription.remove();
   }, []);
+
 
   const handleAppStateChange = async (state: AppStateStatus) => {
     if (state === 'active') {
@@ -65,74 +123,80 @@ function RootLayoutContent() {
       await Notifications.setBadgeCountAsync(0);
     }
   };
-  // Initialize push notifications when user is authenticated
+
+  // Initialize push notifications and request media permissions when user is authenticated
   useEffect(() => {
     if (user?.id) {
+      // Request camera and gallery permissions at startup
+      requestMediaPermissions();
+      
       initializePushNotifications(Number(user.id));
 
       const cleanup = setupNotificationListeners(
         (notification) => {
-          addFromPushNotification(notification);
+          const content = notification.request.content;
+          const title = content.title || 'Notifikace';
+          const body = content.body || '';
+          // Show as toast immediately
+          showToast(body || title, 'info');
+          // Save to notification history for Notification Center
+          addNotification(title, body, 'push', content.data);
         },
         (notification) => {
-          addFromPushNotification(notification);
+          const content = notification.request.content;
+          const title = content.title || 'Notifikace';
+          const body = content.body || '';
+          // Show as toast immediately
+          showToast(body || title, 'info');
+          // Save to notification history for Notification Center
+          addNotification(title, body, 'push', content.data);
         }
       );
 
       return cleanup;
     }
-  }, [user?.id, addFromPushNotification]);
-
-  // Persist notifications to AsyncStorage whenever they change
-  useEffect(() => {
-    const persistNotifications = async () => {
-      try {
-        await AsyncStorage.setItem('notifications', JSON.stringify(notifications));
-      } catch (error) {
-        // Silently fail or log error if needed
-      }
-    };
-    persistNotifications();
-  }, [notifications]);
+  }, [user?.id, showToast, addNotification]);
 
   return (
-    <>
+    <NavigationThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
+      {/* Web nemá nativní modul notifikací - viz komentář u komponenty */}
+      {Platform.OS !== 'web' && <PushNotificationNavigator userId={user?.id} />}
       <AuthGate>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
-          <Stack.Screen 
-            name="filters" 
-            options={{ 
+          <Stack.Screen
+            name="filters"
+            options={{
               presentation: 'modal',
               headerShown: false,
-            }} 
+            }}
           />
-          <Stack.Screen 
-            name="new-purchase" 
-            options={{ 
+          <Stack.Screen
+            name="new-purchase"
+            options={{
               presentation: 'fullScreenModal',
               headerShown: false,
-            }} 
+            }}
           />
-          <Stack.Screen 
-            name="purchase/[id]" 
-            options={{ 
+          <Stack.Screen
+            name="purchase/[id]"
+            options={{
               headerShown: false,
-            }} 
+            }}
+          />
+          <Stack.Screen
+            name="admin/catalog"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+            }}
           />
         </Stack>
       </AuthGate>
+      {/* Single unified toast container */}
       <ToastContainer />
-      {/* Display push notification toasts */}
-      {notifications.length > 0 && (
-        <View style={styles.notificationStack}>
-          {notifications.slice(0, 1).map((notif) => (
-            <NotificationToast key={notif.id} notification={notif} />
-          ))}
-        </View>
-      )}
-    </>
+    </NavigationThemeProvider>
   );
 }
 
@@ -164,13 +228,5 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  notificationStack: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
-    pointerEvents: 'none',
   },
 });

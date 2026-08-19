@@ -9,7 +9,6 @@ import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Switch,
@@ -18,6 +17,7 @@ import {
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { showAlert } from '@/utils/alert';
 
 export default function FiltersScreen() {
   const { theme } = useTheme();
@@ -46,7 +46,7 @@ export default function FiltersScreen() {
   };
 
   const handleClear = () => {
-    Alert.alert(
+    showAlert(
       'Vymazat filtry',
       'Opravdu chcete vymazat všechny filtry?',
       [
@@ -159,7 +159,7 @@ export default function FiltersScreen() {
           <View style={[styles.filterRow]}>
             <View style={styles.filterInfo}>
               <Text style={[styles.filterLabel, { color: theme.text }]}>SERVIS</Text>
-              <Text style={[styles.filterDescription, { color: theme.textSecondary }]}>VykoUpené s servisní poznámkou</Text>
+              <Text style={[styles.filterDescription, { color: theme.textSecondary }]}>Vykoupená vozidla se servisním požadavkem</Text>
             </View>
             <Switch
               value={localFilter.serviceNotesOnly || false}

@@ -2,6 +2,7 @@
 
 export interface Purchase {
   id: string;
+  clientId?: string | null; // Client/Supplier ID
   clientName: string;
   clientType: ClientType;
   companyInfo?: CompanyInfo;
@@ -30,17 +31,42 @@ export interface Purchase {
   images?: string[];
   defectImages?: string[];
   componentStatuses?: ComponentStatus[];
+  paintThickness?: PaintThicknessReading[];
   sourceKnowledge?: string;
   vinVerified?: boolean;
   isCounterAccount?: boolean;
   cebia?: boolean;
   caVertical?: boolean;
+  coverPhotoUri?: string | null;
+  // Priority feature
+  isPriority?: number; // 0 or 1
 }
 
 export interface ComponentStatus {
   component: string;
   status: 'excellent' | 'good' | 'fair' | 'poor' | 'damaged';
   notes?: string;
+}
+
+// Panely karoserie pro měření tloušťky laku.
+// Orientace diagramu: příď vlevo, horní hrana = pravá strana vozu, dolní = levá.
+export type PaintZoneKey =
+  | 'hood'
+  | 'roof'
+  | 'tailgate'
+  | 'fenderFrontRight'
+  | 'doorFrontRight'
+  | 'doorRearRight'
+  | 'fenderRearRight'
+  | 'fenderFrontLeft'
+  | 'doorFrontLeft'
+  | 'doorRearLeft'
+  | 'fenderRearLeft';
+
+export interface PaintThicknessReading {
+  zone: PaintZoneKey;
+  // Tloušťka v µm; null = panel nebyl změřen
+  valueUm: number | null;
 }
 
 export interface CompanyInfo {
@@ -65,6 +91,7 @@ export interface Car {
   // Extended fields
   bodyType?: string;
   driveType?: string;
+  spz?: string;
   stk?: string;
   firstRegistration?: string;
   motorovaVarianta?: string;
@@ -75,6 +102,7 @@ export interface Car {
   hasServiceBook?: boolean;
   hasSecurityScrews?: boolean;
   hasAiWheels?: boolean;
+  registered?: boolean;
 }
 
 export interface PurchaseFilter {
@@ -115,6 +143,6 @@ export interface Employee {
 }
 
 export enum ClientType {
-  PERSONAL = 'PERSONAL',
-  COMPANY = 'COMPANY'
+  PERSONAL = 'person',
+  COMPANY = 'company'
 }

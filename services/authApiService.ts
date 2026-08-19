@@ -1,6 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
-const AUTH_API_URL = 'https://app.autohity.cz/api/account';
+// Auth server neposílá CORS hlavičky, takže z prohlížeče na něj nelze volat
+// přímo - web jde přes PHP proxy na autohity.cz. Nativní build volá upstream.
+const AUTH_UPSTREAM_URL = 'https://app.autohity.cz/api/account';
+const AUTH_PROXY_URL =
+  process.env.EXPO_PUBLIC_AUTH_PROXY_URL || 'https://autohity.cz/php-api/auth-proxy.php';
+
+/** URL auth endpointu ('sign-in', 'profile') pro aktuální platformu. */
+export function authEndpoint(path: string): string {
+  return Platform.OS === 'web'
+    ? `${AUTH_PROXY_URL}?path=${encodeURIComponent(path)}`
+    : `${AUTH_UPSTREAM_URL}/${path}`;
+}
 
 export interface LoginResponse {
   id?: number;
@@ -37,7 +49,6 @@ class AuthApiService {
       );
       return JSON.parse(jsonPayload);
     } catch (err) {
-      console.warn('[AuthApiService] JWT parse error:', err);
       return null;
     }
   }
@@ -46,7 +57,7 @@ class AuthApiService {
    * Přihlášení - POST /api/account/sign-in
    */
   async login(userName: string, password: string): Promise<LoginResponse> {
-    const response = await fetch(`${AUTH_API_URL}/sign-in`, {
+    const response = await fetch(authEndpoint('sign-in'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userName, password }),
@@ -54,7 +65,6 @@ class AuthApiService {
 
     if (!response.ok) {
       const error = await response.text().catch(() => `HTTP ${response.status}`);
-      console.error('[AuthApiService] Login failed:', error);
       throw new Error(`Přihlášení selhalo: ${error}`);
     }
 
@@ -75,7 +85,7 @@ class AuthApiService {
    * Získej profil - GET /api/account/profile
    */
   async getProfile(token: string): Promise<ProfileResponse> {
-    const response = await fetch(`${AUTH_API_URL}/profile`, {
+    const response = await fetch(authEndpoint('profile'), {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -85,7 +95,6 @@ class AuthApiService {
 
     if (!response.ok) {
       const error = await response.text().catch(() => `HTTP ${response.status}`);
-      console.error('[AuthApiService] Get profile failed:', error);
       throw new Error(`Načtení profilu selhalo: ${error}`);
     }
 

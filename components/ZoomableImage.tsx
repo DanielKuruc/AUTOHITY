@@ -30,7 +30,8 @@ export default function ZoomableImage({ uri }: Props) {
           offsetX.value = 0;
           offsetY.value = 0;
         }
-      }), []);
+      }), // eslint-disable-next-line react-hooks/exhaustive-deps
+    []);
 
   const pan = useMemo(() =>
     Gesture.Pan()
@@ -60,7 +61,8 @@ export default function ZoomableImage({ uri }: Props) {
           offsetX.value = 0;
           offsetY.value = 0;
         }
-      }), []);
+      }), // eslint-disable-next-line react-hooks/exhaustive-deps
+    []);
 
   const doubleTap = useMemo(() =>
     Gesture.Tap().numberOfTaps(2).onEnd(() => {
@@ -73,7 +75,8 @@ export default function ZoomableImage({ uri }: Props) {
         offsetX.value = 0;
         offsetY.value = 0;
       }
-    }), []);
+    }), // eslint-disable-next-line react-hooks/exhaustive-deps
+    []);
 
   const composed = Gesture.Simultaneous(pinch, pan, doubleTap);
 

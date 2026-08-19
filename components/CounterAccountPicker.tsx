@@ -22,7 +22,6 @@ export default function CounterAccountPicker({ visible, onClose, onSelect }: Pro
       const res = await fetchBase44Cars(q);
       setItems(res);
     } catch (e) {
-      console.log('[CounterAccountPicker] load error', e);
     } finally {
       setLoading(false);
     }

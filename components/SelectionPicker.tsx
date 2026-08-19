@@ -34,8 +34,38 @@ export function SelectionPicker({
   const isEmpty = !value || value === '---Výběr---';
   const borderColor = isEmpty ? '#E30613' : (error ? '#FF3B30' : theme.border);
 
+  // Check if item is a section marker
+  const isSectionMarker = (item: string) => item.startsWith('___') && item.endsWith('___');
+
   const renderOption = ({ item, index }: { item: string; index: number }) => {
-    const isSelected = value === item;
+    // Render section header for TOP_BRANDS
+    if (item === '___TOP_BRANDS_START___') {
+      return (
+        <View style={[styles.sectionHeader, { backgroundColor: theme.inputBackground, borderBottomColor: theme.border }]}>
+          <Text style={[styles.sectionHeaderText, { color: theme.accent }]}>Nejpoužívanější značky</Text>
+        </View>
+      );
+    }
+
+    // Render section header for OTHER_BRANDS (when TOP section ends)
+    if (item === '___TOP_BRANDS_END___') {
+      return (
+        <View style={[styles.sectionHeader, { backgroundColor: theme.inputBackground, borderBottomColor: theme.border, marginTop: 8 }]}>
+          <Text style={[styles.sectionHeaderText, { color: theme.textSecondary }]}>Ostatní značky</Text>
+        </View>
+      );
+    }
+
+    // Skip all section markers from being selectable
+    if (isSectionMarker(item)) {
+      return null;
+    }
+
+    // CRITICAL: Normalize both values for comparison (trim whitespace)
+    // This ensures "GL 350 " matches "GL 350" even with extra spaces
+    const normalizedValue = value?.trim() || '';
+    const normalizedItem = item?.trim() || '';
+    const isSelected = normalizedValue === normalizedItem;
     const isPlaceholder = item === '---Výběr---';
     return (
       <TouchableOpacity
@@ -43,7 +73,6 @@ export function SelectionPicker({
           styles.optionItem,
           { borderBottomColor: theme.border },
           isSelected && { backgroundColor: theme.accent + '15' },
-          index === options.length - 1 && styles.lastOption
         ]}
         onPress={() => handleSelect(item)}
       >
@@ -144,7 +173,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   modalContent: {
@@ -191,5 +220,16 @@ const styles = StyleSheet.create({
   optionText: {
     fontSize: 16,
     flex: 1,
+  },
+  sectionHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  sectionHeaderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
 });

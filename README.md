@@ -1,82 +1,113 @@
-# Project Quickstart
+# AUTOHITY — Výkup
 
-This Expo project was vibe coded with [SteerCode](https://steercode.com).
+Aplikace pro evidenci výkupu vozidel. Výkupčí v ní zakládá nové výkupy přímo
+v terénu — načte VIN, vyfotí vůz, zaznamená stav součástí a tloušťky laku —
+a sleduje, jak se obchod posouvá od prvního kontaktu až po vykoupení.
 
-Follow this guide to quickly edit, run, and publish your Expo app.
+Běží na iOSu, Androidu i ve webovém prohlížeči ze společné kódové základny.
 
-## Project Access
+## Co aplikace umí
 
-Visit your project directly here:
+- **Výkupy** — seznam s fotkami, filtry a fulltextovým vyhledáváním; detail
+  vozidla s údaji z registru, stavem součástí a měřením tloušťky laku
+- **Načtení VIN** — z fotky pomocí rozpoznávání textu přímo na zařízení,
+  s dohledáním údajů o vozidle a doplněním firemních dat z ARESu podle IČO
+- **Statistiky a reporty** — přehledy za období, po výkupčích a dodavatelích,
+  s exportem do PDF
+- **Notifikace** — push o novém výkupu a o změně stavu; klepnutí otevře
+  konkrétní vozidlo
+- **Správa číselníků** — značky a modely vozidel (jen pro administrátory)
 
-[\<YOUR_PROJECT_URL>](YOUR_PROJECT_URL)
+## Technologie
 
-## How to Edit Your Project
+| | |
+|---|---|
+| Expo SDK | 57 |
+| React Native | 0.86 (React 19) |
+| Navigace | expo-router (file-based, typed routes) |
+| Stav a data | Zustand, TanStack Query |
+| Jazyk | TypeScript |
+| Backend | PHP + MySQL (složka `php-api/`) |
 
-You have multiple ways to manage your Expo project:
+## Struktura
 
-### Using SteerCode
+```
+app/              obrazovky a routy
+  (tabs)/         Výkupy, Statistiky, Notifikace, Reporty, Profil
+  purchase/       detail a editace výkupu
+  new-purchase/   průvodce založením
+  admin/          číselník značek a modelů
+components/       sdílené komponenty
+contexts/         Auth, Theme, Purchases, Notifications, Toast, Users
+services/         volání API, export do PDF, push notifikace
+hooks/  utils/  constants/
+assets/           obrázky a fonty
+php-api/          REST API a databázové schéma
+```
 
-* Access your [project at SteerCode](YOUR_PROJECT_URL).
-* Edit using simple prompts.
-* All changes are auto-saved to your repository.
+## Spuštění
 
-### Using a Local IDE
+Potřebujete Node.js a npm.
 
-To work locally, follow these steps:
+```bash
+npm install
+npm start          # vývojový server, pak `i` pro iOS, `a` pro Android
+npm run web        # rovnou ve webovém prohlížeči
+```
 
-1. **Clone Your Repository**
+Pro běh na telefonu je kvůli nativním modulům (fotoaparát, push notifikace)
+potřeba development build, ne Expo Go.
 
-   ```bash
-   git clone <YOUR_GIT_URL>
-   ```
+Další skripty:
 
-2. **Navigate to Your Project Directory**
+```bash
+npm run typecheck  # kontrola typů
+npm run lint
+```
 
-   ```bash
-   cd <YOUR_PROJECT_NAME>
-   ```
+## Konfigurace
 
-3. **Install Dependencies**
+Proměnné prostředí se načítají ze souboru `.env` v kořeni projektu. Ten do
+repozitáře nepatří — každý si ho drží lokálně, na hostingu se hodnoty zadávají
+v nastavení projektu.
 
-   Ensure Node.js and npm are installed ([install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)):
+| Proměnná | K čemu |
+|---|---|
+| `EXPO_PUBLIC_VEHICLE_DATA_API_KEY` | dohledání údajů o vozidle podle VIN |
+| `EXPO_PUBLIC_BASE44_API_KEY` | katalog vozidel nabízených na protiúčet |
+| `EXPO_PUBLIC_DEMO_USERNAME`, `EXPO_PUBLIC_DEMO_PASSWORD` | demo přihlášení bez volání na server |
+| `EXPO_PUBLIC_PHP_API_BASE` | jiná adresa API než výchozí `https://autohity.cz` |
+| `EXPO_PUBLIC_AUTH_PROXY_URL` | jiná adresa přihlašovací proxy |
 
-   ```bash
-   npm install
-   ```
+Vše s předponou `EXPO_PUBLIC_` se zapéká do aplikačního balíčku a je z něj
+čitelné — nepatří sem nic, co má zůstat tajné.
 
-4. **Run the Expo Development Server**
+## Backend
 
-   Launch your Expo project:
+REST API ve složce `php-api/` běží na `autohity.cz` a nasazuje se ručně
+nahráním souborů. Přihlašování obstarává samostatný server `app.autohity.cz`.
 
-   ```bash
-   npm start
-   ```
+Ten neposílá hlavičky CORS, takže webová verze na něj nemůže volat přímo —
+požadavky proto vede přes `php-api/auth-proxy.php`, který je přeposílá a
+hlavičky doplní. Nativní aplikace volá přihlašovací server napřímo.
 
-   Scan the QR code using Expo Go or run in an emulator.
+Pro vývoj webu bez nasazené proxy:
 
-### Editing Directly on GitHub
+```bash
+npm run auth-proxy        # lokální PHP proxy na portu 8099
+npm run web:local-auth    # web nasměrovaný na ni
+```
 
-For quick edits:
+## Build webu
 
-* Open the file on GitHub.
-* Click the pencil icon to edit.
-* Make changes and commit directly.
+```bash
+npx expo export --platform web
+```
 
-## Tech Stack
+Výsledné statické soubory ve složce `dist/` stačí nahrát na libovolný hosting.
 
-This Expo project uses:
+## Poznámky k rozhraní
 
-* **Expo SDK 53** – easy React Native app development
-* **React Native** – build native apps with JavaScript
-* **TypeScript** – strongly-typed JavaScript
-* **expo-router** – simple navigation
-* **Expo Vector Icons** – built-in icon sets
-
-## Publishing Your Project
-
-Publish your project easily:
-
-* Open [SteerCode](YOUR_PROJECT_URL).
-* Click the **Publish** button.
-
-Happy coding!
+Na tabletu a v prohlížeči se rozhraní přepíná do širokého rozvržení s postranním
+panelem a mřížkou výkupů; na telefonu se používají spodní záložky. Hranicí je
+šířka okna, takže na webu se rozvržení mění spolu s velikostí okna.

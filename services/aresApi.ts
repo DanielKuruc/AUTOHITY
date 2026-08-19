@@ -87,7 +87,6 @@ export const fetchCompanyByIco = async (ico: string): Promise<AresCompanyData> =
   const cleanIco = ico.replace(/\s/g, '');
   const url = `${ARES_API_URL}/${cleanIco}`;
 
-  console.log('[ARES API] Načítám data z:', url);
 
   try {
     const response = await fetch(url, {
@@ -103,16 +102,13 @@ export const fetchCompanyByIco = async (ico: string): Promise<AresCompanyData> =
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[ARES API] Chyba:', response.status, errorText);
       throw new Error(`Chyba při načítání dat: ${response.status}`);
     }
 
     const data: AresApiResponse = await response.json();
-    console.log('[ARES API] Přijata data:', data);
 
     return mapAresResponse(data);
   } catch (error: any) {
-    console.error('[ARES API] Chyba při načítání:', error);
     
     // Pokud je to NetworkError, může to být CORS problém
     if (error.message === 'Network request failed') {
@@ -186,7 +182,6 @@ export const searchCompaniesByName = async (name: string, limit: number = 10): P
 
   const url = `${ARES_API_URL}?obchodniJmeno=${encodeURIComponent(name)}&start=0&pocet=${limit}`;
 
-  console.log('[ARES API] Vyhledávám:', url);
 
   try {
     const response = await fetch(url, {
@@ -213,7 +208,6 @@ export const searchCompaniesByName = async (name: string, limit: number = 10): P
       success: true,
     }));
   } catch (error: any) {
-    console.error('[ARES API] Chyba při vyhledávání:', error);
     throw error;
   }
 };

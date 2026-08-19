@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -7,10 +7,14 @@ import {
   StyleSheet,
   Dimensions,
   Animated,
+  SafeAreaView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNotifications, InAppNotification } from '@/contexts/NotificationContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { getPurchaseIdFromData } from '@/services/pushNotifications';
+import { router } from 'expo-router';
 
 /**
  * Toast-style notification popup for in-app push notifications
@@ -26,25 +30,28 @@ export function NotificationToast({ notification }: { notification: InAppNotific
         duration: 300,
         useNativeDriver: true,
       }),
-      Animated.delay(notification.type === 'error' ? 5000 : 3000),
+      Animated.delay(notification.notification_type === 'error' ? 5000 : 3000),
       Animated.timing(animValue, {
         toValue: 0,
         duration: 300,
         useNativeDriver: true,
       }),
     ]).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getColors = () => {
-    switch (notification.type) {
+    switch (notification.notification_type) {
       case 'success':
         return { bg: '#34C759', icon: 'checkmark-circle' };
       case 'error':
         return { bg: '#FF3B30', icon: 'close-circle' };
       case 'warning':
         return { bg: '#FF9500', icon: 'alert-circle' };
-      case 'push':
-        return { bg: theme.accent, icon: 'notifications' };
+      case 'new_purchase':
+        return { bg: theme.accent, icon: 'car' };
+      case 'state_change':
+        return { bg: '#007AFF', icon: 'swap-vertical' };
       default:
         return { bg: theme.accent, icon: 'information-circle' };
     }
@@ -53,35 +60,37 @@ export function NotificationToast({ notification }: { notification: InAppNotific
   const colors = getColors();
 
   return (
-    <Animated.View
-      style={[
-        styles.toast,
-        {
-          backgroundColor: colors.bg,
-          opacity: animValue,
-          transform: [
-            {
-              translateY: animValue.interpolate({
-                inputRange: [0, 1],
-                outputRange: [-100, 0],
-              }),
-            },
-          ],
-        },
-      ]}
-    >
-      <View style={styles.toastContent}>
-        <Ionicons name={colors.icon as any} size={20} color="#FFFFFF" />
-        <View style={styles.toastText}>
-          {notification.title && (
-            <Text style={styles.toastTitle}>{notification.title}</Text>
-          )}
-          {notification.body && (
-            <Text style={styles.toastBody}>{notification.body}</Text>
-          )}
+    <SafeAreaView style={styles.toastContainer} pointerEvents="box-none">
+      <Animated.View
+        style={[
+          styles.toast,
+          {
+            backgroundColor: colors.bg,
+            opacity: animValue,
+            transform: [
+              {
+                translateY: animValue.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [100, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <View style={styles.toastContent}>
+          <Ionicons name={colors.icon as any} size={20} color="#FFFFFF" />
+          <View style={styles.toastText}>
+            {notification.title && (
+              <Text style={styles.toastTitle}>{notification.title}</Text>
+            )}
+            {notification.body && (
+              <Text style={styles.toastBody}>{notification.body}</Text>
+            )}
+          </View>
         </View>
-      </View>
-    </Animated.View>
+      </Animated.View>
+    </SafeAreaView>
   );
 }
 
@@ -89,30 +98,65 @@ export function NotificationToast({ notification }: { notification: InAppNotific
  * Full notification center screen
  */
 export function NotificationCenterScreen() {
-  const { notifications, clearNotifications, removeNotification, markAsRead } = useNotifications();
+  const { notifications, clearNotifications, removeNotification, markAsRead, markAllAsRead, isLoading, loadNotifications } = useNotifications();
   const { theme } = useTheme();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadNotifications();
+    } catch (error) {
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (notifications.length === 0) {
     return (
-      <View style={[styles.emptyContainer, { backgroundColor: theme.background }]}>
-        <Ionicons name="notifications-off" size={48} color={theme.textTertiary} />
-        <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-          Žádné notifikace
-        </Text>
-      </View>
+      <ScrollView 
+        style={[styles.container, { backgroundColor: theme.background }]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={theme.accent}
+            title="Aktualizuji..."
+            titleColor={theme.textSecondary}
+          />
+        }
+      >
+        <View style={[styles.emptyContainer, { backgroundColor: theme.background }]}>
+          <Ionicons name="notifications-off" size={48} color={theme.textTertiary} />
+          <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+            Žádné notifikace
+          </Text>
+        </View>
+      </ScrollView>
     );
   }
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* Clear all button */}
+    <ScrollView 
+      style={[styles.container, { backgroundColor: theme.background }]}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          tintColor={theme.accent}
+          title="Aktualizuji..."
+          titleColor={theme.textSecondary}
+        />
+      }
+    >
+      {/* Mark all as read button */}
       <TouchableOpacity
         style={[styles.clearButton, { backgroundColor: theme.card }]}
-        onPress={clearNotifications}
+        onPress={markAllAsRead}
       >
-        <Ionicons name="trash-outline" size={16} color={theme.accent} />
+        <Ionicons name="checkmark-done" size={16} color={theme.accent} />
         <Text style={[styles.clearButtonText, { color: theme.accent }]}>
-          Smazat všechny
+          Označit všechny jako přečtené
         </Text>
       </TouchableOpacity>
 
@@ -120,10 +164,17 @@ export function NotificationCenterScreen() {
       <View style={styles.notificationsContainer}>
         {notifications.map((notification) => (
           <NotificationItem
-            key={notification.id}
+            key={String(notification.id)}
             notification={notification}
             onClose={() => removeNotification(notification.id)}
-            onPress={() => markAsRead(notification.id)}
+            onPress={() => {
+              markAsRead(notification.id);
+              // Notifikace o výkupu nese purchaseId - otevři rovnou to vozidlo
+              const purchaseId = getPurchaseIdFromData(notification.data);
+              if (purchaseId) {
+                router.push(`/purchase/${purchaseId}`);
+              }
+            }}
           />
         ))}
       </View>
@@ -146,7 +197,7 @@ function NotificationItem({
   const { theme } = useTheme();
 
   const getTypeColors = () => {
-    switch (notification.type) {
+    switch (notification.notification_type) {
       case 'success':
         return {
           bg: '#34C75915',
@@ -168,25 +219,32 @@ function NotificationItem({
           icon: 'alert-circle',
           color: '#FF9500',
         };
-      case 'push':
+      case 'new_purchase':
         return {
           bg: theme.accentLight,
           border: theme.accent,
-          icon: 'notifications',
+          icon: 'car',
           color: theme.accent,
+        };
+      case 'state_change':
+        return {
+          bg: '#007AFF15',
+          border: '#007AFF',
+          icon: 'swap-vertical',
+          color: '#007AFF',
         };
       default:
         return {
           bg: theme.inputBackground,
           border: theme.border,
-          icon: 'information-circle',
+          icon: 'notifications',
           color: theme.accent,
         };
     }
   };
 
   const colors = getTypeColors();
-  const timeAgo = getTimeAgo(notification.timestamp);
+  const timeAgo = getTimeAgo(new Date(notification.created_at).getTime());
 
   return (
     <TouchableOpacity
@@ -195,7 +253,7 @@ function NotificationItem({
         {
           backgroundColor: colors.bg,
           borderLeftColor: colors.border,
-          opacity: notification.read ? 0.6 : 1,
+          opacity: notification.is_read ? 0.6 : 1,
         },
       ]}
       onPress={onPress}
@@ -208,7 +266,7 @@ function NotificationItem({
               <Text
                 style={[
                   styles.notificationTitle,
-                  { color: theme.text, fontWeight: notification.read ? '500' : '700' },
+                  { color: theme.text, fontWeight: notification.is_read ? '500' : '700' },
                 ]}
               >
                 {notification.title}
@@ -320,20 +378,26 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 4,
   },
-  toast: {
+  toastContainer: {
     position: 'absolute',
-    top: 0,
+    bottom: 0,
     left: 0,
     right: 0,
+    pointerEvents: 'box-none',
+  },
+  toast: {
     backgroundColor: '#FF9500',
+    marginHorizontal: 12,
+    marginBottom: 12,
     paddingVertical: 12,
     paddingHorizontal: 16,
+    borderRadius: 12,
     zIndex: 1000,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
   },
   toastContent: {
     flexDirection: 'row',

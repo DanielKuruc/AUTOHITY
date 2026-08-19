@@ -1,19 +1,20 @@
 // @ts-nocheck
+import ClientHistoryModal from '@/components/ClientHistoryModal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import CounterAccountPicker from '@/components/CounterAccountPicker';
 import { DatePickerField } from '@/components/DatePickerField';
+import { PaintThicknessModal } from '@/components/PaintThicknessModal';
 import { PhoneInput } from '@/components/PhoneInput';
 import { SelectionPicker } from '@/components/SelectionPicker';
 import { SpzInput } from '@/components/SpzInput';
 import { WheelPicker } from '@/components/WheelPicker';
-import {
-  VEHICLE_MAKES,
-  VEHICLE_MODELS,
-} from '@/constants/vehicleOptions';
+import { PaintThicknessReading } from '@/constants/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePurchases } from '@/contexts/PurchaseContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useMakesModelsApi } from '@/hooks/useMakesModelsApi';
 import { useTabletLayout } from '@/hooks/useTabletLayout';
+import { resolveKeyboardType } from '@/utils/keyboard';
 import { apiService as apiServiceUntyped } from '@/services/apiService';
 import {
   fetchCompanyByIco,
@@ -30,9 +31,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
+import { validatePurchaseFormWithContext } from '@/services/validationService';
+import { findClosestModel } from '@/utils/fuzzyMatch';
+import Animated, { interpolate, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   Image,
   KeyboardAvoidingView,
@@ -46,6 +49,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { showAlert } from '@/utils/alert';
 const apiService = apiServiceUntyped as any;
 
 const PURCHASE_TABS = [
@@ -78,6 +82,24 @@ const PREVODOVKA = ['---Výběr---', 'Automatická', 'Manuální'];
 const POHON = ['---Výběr---', 'Přední', 'Zadní', '4x4'];
 const ODKUD_ZNA = ['---Výběr---', 'Billboardy', 'Doporučení', 'Internet', 'Jiné', 'Rádio', 'Reklama', 'Sociální sítě', 'Vrací se'];
 
+// ✅ Helper: Fuzzy match brand name using simple algorithm
+const findClosestBrand = (apiName: string, knownBrands: string[]): string | null => {
+  if (!apiName || knownBrands.length === 0) return null;
+  
+  // Simple similarity check - if brand starts with same letters
+  for (const brand of knownBrands) {
+    const brandUpper = brand.toUpperCase();
+    // Exact match
+    if (apiName === brandUpper) return brand;
+    // Starts with same letters (e.g., "CITROEN" starts with "CITR" like "Citroen")
+    if (apiName.startsWith(brandUpper.substring(0, 4)) || brandUpper.startsWith(apiName.substring(0, 4))) {
+      return brand;
+    }
+  }
+  
+  return null;
+};
+
 // Helper functions for mapping API values to our dropdowns
 const normalizeZnacka = (apiZnacka: string): string => {
   if (!apiZnacka) return '---Výběr---';
@@ -106,6 +128,8 @@ const normalizeZnacka = (apiZnacka: string): string => {
     'RENAULT': 'Renault',
     'CITROEN': 'Citroen',
     'CITROËN': 'Citroen',
+    'CITROEN SA': 'Citroen',
+    'CITROËN SA': 'Citroen',
     'FIAT': 'Fiat',
     'ALFA ROMEO': 'Alfa Romeo',
     'VOLVO': 'Volvo',
@@ -132,44 +156,39 @@ const normalizeZnacka = (apiZnacka: string): string => {
     return brandMap[upperNormalized];
   }
 
-  // Try to find in VEHICLE_MAKES (case-insensitive)
-  const found = VEHICLE_MAKES.find(make => 
-    make.toLowerCase() === normalized.toLowerCase()
-  );
-  if (found) return found;
+  // ✅ Fallback 1: Pokud není v mapě, zkus normalizovat speciální znaky
+  const replaceSpecial = upperNormalized.replace(/[ËÈÉÊÄÀÁÂØÖÒÓÔÕ]/gi, (char) => {
+    const charMap: Record<string, string> = {
+      'Ë': 'E', 'È': 'E', 'É': 'E', 'Ê': 'E',
+      'Ä': 'A', 'À': 'A', 'Á': 'A', 'Â': 'A',
+      'Ø': 'O', 'Ö': 'O', 'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Õ': 'O',
+    };
+    return charMap[char.toUpperCase()] || char;
+  });
+  
+  if (brandMap[replaceSpecial]) {
+    return brandMap[replaceSpecial];
+  }
+
+  // ✅ Fallback 2: Pokud pořád nic, zkus fuzzy match na znalé značky
+  const knownBrands = Object.values(brandMap);
+  const bestMatch = findClosestBrand(upperNormalized, knownBrands);
+  if (bestMatch) return bestMatch;
 
   // Return original with title case as fallback
   return normalized.charAt(0).toUpperCase() + normalized.slice(1).toLowerCase();
 };
 
-const findMatchingModel = (znacka: string, apiModel: string): string => {
+// ✅ NEW: findMatchingModel bere seznam dostupných modelů a vrací fuzzy match
+const findMatchingModelWithAvailable = (
+  znacka: string,
+  apiModel: string,
+  availableModels: string[],
+): string => {
   if (!apiModel || !znacka || znacka === '---Výběr---') return '---Výběr---';
-
-  const models = VEHICLE_MODELS[znacka] || [];
-  if (models.length === 0) return '---Výběr---';
-
-  const normalizedApiModel = apiModel.toUpperCase().trim();
-
-  // Try exact match
-  const exactMatch = models.find(m => m.toUpperCase() === normalizedApiModel);
-  if (exactMatch) return exactMatch;
-
-  // Try partial match (API model contains our model name)
-  const partialMatch = models.find(m => 
-    normalizedApiModel.includes(m.toUpperCase()) || 
-    m.toUpperCase().includes(normalizedApiModel)
-  );
-  if (partialMatch) return partialMatch;
-
-  // Try matching first word/number
-  const apiFirstPart = normalizedApiModel.split(/[\s-]/)[0];
-  const firstPartMatch = models.find(m => 
-    m.toUpperCase().startsWith(apiFirstPart) ||
-    apiFirstPart.includes(m.toUpperCase().replace(/[^A-Z0-9]/g, ''))
-  );
-  if (firstPartMatch) return firstPartMatch;
-
-  return '---Výběr---';
+  
+  // Použij fuzzy matching - vrátí best match ze číslenníku
+  return findClosestModel(apiModel, availableModels);
 };
 
 const mapFuelToWheelPicker = (apiFuel: string, objemMotoru?: number): string => {
@@ -425,7 +444,17 @@ export default function NewPurchaseScreen() {
   const insets = useSafeAreaInsets();
   const { isTablet, isSplitView } = useTabletLayout();
   const { initData, clearInitData } = usePurchases();
+  const { isInitialized, getModelNamesByMakeId, getTopMakes, getOtherMakes, findMakeByName } = useMakesModelsApi();
   const [selectedTab, setSelectedTab] = useState('zakladni');
+  // ✅ Animation for registered toggle - fade in/out hidden fields with height collapse
+  const fadeAnim = useSharedValue(1);
+  const heightAnim = useSharedValue(1);
+  const fadeAnimStyle = useAnimatedStyle(() => {
+    return {
+      opacity: fadeAnim.value,
+      maxHeight: interpolate(heightAnim.value, [0, 1], [0, 5000]),
+    };
+  });
   // Refs for vertical scroll reset per tab
   const zakladniRef = useRef<ScrollView>(null);
   const automobilRef = useRef<ScrollView>(null);
@@ -449,6 +478,11 @@ export default function NewPurchaseScreen() {
   const [showCounterPicker, setShowCounterPicker] = useState(false);
   const [counterCar, setCounterCar] = useState<Base44Car | null>(null);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [showClientHistoryModal, setShowClientHistoryModal] = useState<'company' | 'person' | null>(null);
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
+  const skipAutoFetchRef = useRef(false);
+  // Holds raw API vehicle data waiting for makes/models to finish loading
+  const pendingVehicleDataRef = useRef<{ znacka: string; model: string } | null>(null);
 
   // Validation state for zakladniData fields
   const [zakladniValidation, setZakladniValidation] = useState({
@@ -478,6 +512,7 @@ export default function NewPurchaseScreen() {
     nazevFirmy: '',
     telefon: '',
     ico: '',
+    dic: '',
     ulice: '',
     mesto: '',
     psc: '',
@@ -502,6 +537,8 @@ export default function NewPurchaseScreen() {
     cebia: false,
     caVertical: false,
     protiucet: false,
+    vinProveren: false,
+    registered: true,
   });
 
   const [stavSoucastiData, setStavSoucastiData] = useState<ComponentStatus[]>(
@@ -512,6 +549,9 @@ export default function NewPurchaseScreen() {
     }))
   );
 
+  const [paintThickness, setPaintThickness] = useState<PaintThicknessReading[]>([]);
+  const [showPaintThickness, setShowPaintThickness] = useState(false);
+
   // Photo states
   const [coverPhotoUri, setCoverPhotoUri] = useState<string | null>(null);
   const [vehicleImages, setVehicleImages] = useState<string[]>([]);
@@ -520,6 +560,7 @@ export default function NewPurchaseScreen() {
   const [loading, setLoading] = useState(false);
   const [vinLoading, setVinLoading] = useState(false);
   const [icoLoading, setIcoLoading] = useState(false);
+  const [icoError, setIcoError] = useState<string | null>(null);
 
   const { addPurchase, addPendingUpload, updatePurchaseProgress, markUploadSuccess, markUploadError, updatePurchase, setAutomobilData: setContextAutomobilData, setGeneralNotes: setContextGeneralNotes, setServiceNotes: setContextServiceNotes } = usePurchases();
 
@@ -535,15 +576,35 @@ export default function NewPurchaseScreen() {
   // Validation errors state consolidated here
   const [validationErrors, setValidationErrors] = useState<Record<string, boolean>>({});
 
+  // ✅ EFFECT: Animate fade + height when registered toggle changes
+  useEffect(() => {
+    const isRegistered = automobilData.registered ?? true;
+    fadeAnim.value = withTiming(isRegistered ? 1 : 0, { duration: 300 });
+    heightAnim.value = withTiming(isRegistered ? 1 : 0, { duration: 300 });
+    // Automatické zapnutí/vypnutí "Dovoz"
+    if (!isRegistered) {
+      setAutomobilData(prev => ({ ...prev, dovoz: true }));
+    } else {
+      setAutomobilData(prev => ({ ...prev, dovoz: false }));
+    }
+  }, [automobilData.registered, fadeAnim, heightAnim]);
+
   // Initialize form from initData in context on mount
   useEffect(() => {
-
     const hasInitData = initData?.vin || initData?.firstName || initData?.companyName || initData?.vehicleData;
     if (!hasInitData) {
       // Important: Do NOT load draft automatically here to avoid persisting old test values
       return;
     }
 
+    console.log('New purchase - initData received:', {
+      firstName: initData.firstName,
+      lastName: initData.lastName,
+      companyName: initData.companyName,
+      ico: initData.ico,
+      phone: initData.phone,
+      companyData: initData.companyData,
+    });
 
     // Set basic client info
     if (initData.firstName || initData.lastName || initData.companyName) {
@@ -567,7 +628,17 @@ export default function NewPurchaseScreen() {
     if (initData.vehicleData) {
       const vd = initData.vehicleData;
       const znacka = normalizeZnacka(vd.znacka || '');
-      const model = findMatchingModel(znacka, vd.model || '');
+      // Get available models for fuzzy matching — may be empty if makes haven't loaded yet
+      const make = findMakeByName(znacka);
+      const availableModels = make
+        ? ['---Výběr---', ...getModelNamesByMakeId(make.id)]
+        : ['---Výběr---'];
+      const model = findMatchingModelWithAvailable(znacka, vd.model || '', availableModels);
+
+      // If makes aren't loaded yet, store raw data so we can re-match later
+      if (!isInitialized && vd.model) {
+        pendingVehicleDataRef.current = { znacka, model: vd.model };
+      }
 
       setAutomobilData(prev => ({
         ...prev,
@@ -582,26 +653,49 @@ export default function NewPurchaseScreen() {
         pocetVlastniku: vd.pocetVlastniku?.toString() || '',
         pocetProvozovatelu: vd.pocetProvozovatelu?.toString() || '',
       }));
+
       setSouhrnData(prev => ({ ...prev, vinProveren: true }));
     }
 
-    // Set company data from ARES
+    // ✅ CRITICAL: Set company data - including DIČ, Ulice, Město, PSČ
     if (initData.companyData) {
       const cd = initData.companyData;
+      console.log('New purchase - Setting company data:', cd);
       setZakladniData(prev => ({
         ...prev,
         nazevFirmy: cd.nazev || prev.nazevFirmy,
         ico: cd.ico || prev.ico,
-        ulice: cd.ulice || prev.ulice,
-        mesto: cd.mesto || prev.mesto,
+        dic: cd.dic || prev.dic, // ✅ Set DIČ from company data
+        ulice: cd.ulice || prev.ulice, // ✅ Set ulice (Ulice)
+        mesto: cd.mesto || prev.mesto, // ✅ Set město (Město)
         psc: cd.psc?.replace(/\s/g, '') || prev.psc,
-        platceDPH: cd.platceDPH || prev.platceDPH,
       }));
+    }
+
+    // ✅ CRITICAL: Set selectedClientId from initData if provided
+    if (initData.clientId) {
+      console.log('New purchase - Setting selectedClientId from initData:', initData.clientId);
+      setSelectedClientId(initData.clientId);
     }
 
     // Clear initData after using it
     clearInitData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-run model matching when makes/models finish loading (race condition fix)
+  useEffect(() => {
+    if (!isInitialized || !pendingVehicleDataRef.current) return;
+    const { znacka, model: rawModel } = pendingVehicleDataRef.current;
+    pendingVehicleDataRef.current = null;
+    const make = findMakeByName(znacka);
+    if (!make) return;
+    const availableModels = ['---Výběr---', ...getModelNamesByMakeId(make.id)];
+    const resolvedModel = findMatchingModelWithAvailable(znacka, rawModel, availableModels);
+    if (resolvedModel !== '---Výběr---') {
+      setAutomobilData(prev => ({ ...prev, model: resolvedModel }));
+    }
+  }, [isInitialized]);
 
   // Get generalNotes and serviceNotes from context
   const { generalNotes, serviceNotes } = usePurchases();
@@ -613,6 +707,7 @@ export default function NewPurchaseScreen() {
       zakladniData,
       automobilData,
       stavSoucastiData,
+      paintThickness,
       generalNotes,
       serviceNotes,
       coverPhotoUri,
@@ -622,7 +717,7 @@ export default function NewPurchaseScreen() {
       souhrnData,
     };
     saveDraftData(draftToSave);
-  }, [zakladniValidation, zakladniData, automobilData, stavSoucastiData, generalNotes, serviceNotes, coverPhotoUri, vehicleImages, defectImages, interiorImages, souhrnData]);
+  }, [zakladniValidation, zakladniData, automobilData, stavSoucastiData, paintThickness, generalNotes, serviceNotes, coverPhotoUri, vehicleImages, defectImages, interiorImages, souhrnData]);
 
   const handleTabPress = (tab: typeof PURCHASE_TABS[0]) => {
     setSelectedTab(tab.key);
@@ -656,12 +751,12 @@ export default function NewPurchaseScreen() {
   const handleFetchVehicleData = async () => {
     const validation = validateVin(souhrnData.vin);
     if (!validation.valid) {
-      Alert.alert('Chyba', validation.message || 'Neplatný VIN');
+      showAlert('Chyba', validation.message || 'Neplatný VIN');
       return;
     }
 
     if (!hasApiKey()) {
-      Alert.alert(
+      showAlert(
         'API klíč není nastaven',
         'Pro načtení dat o vozidle je potřeba nastavit API klíč. Kontaktujte administrátora.',
         [{ text: 'OK' }]
@@ -675,7 +770,13 @@ export default function NewPurchaseScreen() {
 
       // Normalize brand and model using helper functions
       const normalizedZnacka = normalizeZnacka(vehicleData.znacka || '');
-      const normalizedModel = findMatchingModel(normalizedZnacka, vehicleData.model || '');
+      // Get available models for fuzzy matching
+      const make = findMakeByName(normalizedZnacka);
+      const availableModels = make 
+        ? ['---Výběr---', ...getModelNamesByMakeId(make.id)]
+        : ['---Výběr---'];
+      // Use findMatchingModel to properly normalize model name
+      const normalizedModel = findMatchingModelWithAvailable(normalizedZnacka, vehicleData.model || '', availableModels);
 
       // Map fuel to motorovaVarianta
       const motorovaVarianta = mapFuelToWheelPicker(vehicleData.palivo || '', vehicleData.objemMotoru);
@@ -740,13 +841,13 @@ export default function NewPurchaseScreen() {
       if (stkValue) loadedFields.push(`STK: ${stkValue}`);
       if (doProvozuValue) loadedFields.push(`Do provozu: ${doProvozuValue}`);
       if (vehicleData.pohon) loadedFields.push(`Pohon: ${vehicleData.pohon}`);
-      Alert.alert(
+      showAlert(
         'Úspěch',
         `Data o vozidle byla načtena:\n\n${loadedFields.join('\n')}`,
         [{ text: 'OK' }]
       );
     } catch (error: any) {
-      Alert.alert(
+      showAlert(
         'Chyba',
         error.message || 'Nepodařilo se načíst data o vozidle',
         [{ text: 'OK' }]
@@ -756,17 +857,140 @@ export default function NewPurchaseScreen() {
     }
   };
 
-  const handleFetchIco = async () => {
-    const validation = validateIco(zakladniData.ico);
+  // Validace IČO formátu (realtime feedback)
+  const validateIcoFormat = (ico: string): { valid: boolean; message?: string } => {
+    if (!ico) {
+      return { valid: false, message: '' };
+    }
+
+    const cleanIco = ico.replace(/\s/g, '');
+
+    // IČO musí mít přesně 8 číslic
+    if (!/^\d{1,8}$/.test(cleanIco)) {
+      return { valid: false, message: 'IČO musí obsahovat pouze čísla (8 číslic)' };
+    }
+
+    // Pokud má 8 číslic, ověřit kontrolní součet
+    if (cleanIco.length === 8) {
+      const weights = [8, 7, 6, 5, 4, 3, 2];
+      let sum = 0;
+      for (let i = 0; i < 7; i++) {
+        sum += parseInt(cleanIco[i]) * weights[i];
+      }
+      const checkDigit = (11 - (sum % 11)) % 10;
+
+      if (parseInt(cleanIco[7]) !== checkDigit) {
+        return { valid: false, message: 'Neplatné IČO (chybný kontrolní součet)' };
+      }
+
+      return { valid: true };
+    }
+
+    // Pokud je méně než 8 číslic, není chyba, jen není úplné
+    return { valid: false, message: '' };
+  };
+
+  // Auto-fetch při dopsání úplného IČO
+  // DISABLED: Auto-fetch úplně vypnut - pouze ruční vyhledávání přes tlačítko
+  /*
+  useEffect(() => {
+    // Skip if just selected from history (check ref, not state)
+    if (skipAutoFetchRef.current) {
+      return;
+    }
+    const ico = zakladniData.ico.replace(/\s/g, '');
+    // Validovat formát a zjistit chyby
+    const validation = validateIcoFormat(ico);
+    if (validation.valid) {
+      // IČO je úplné a validní - automaticky spustit hledání
+      setIcoError(null);
+      handleFetchIco(ico);
+    } else if (validation.message) {
+      // Zobrazit chybu ve formátu
+      setIcoError(validation.message);
+    } else {
+      // Jen chybějící čísla, ne chyba
+      setIcoError(null);
+    }
+  }, [zakladniData.ico]);
+  */
+
+  // Callback pro vybrání klienta z historie
+  const handleSelectClientFromHistory = (client: any) => {
+    // DEBUG: Log client data to see what fields are available
+    console.log('Selected client:', {
+      id: client.id,
+      client_type: client.client_type,
+      company_name: client.company_name,
+      first_name: client.first_name,
+      last_name: client.last_name,
+      ico: client.ico,
+      dic: client.dic,
+      phone: client.phone,
+      street: client.street,
+      city: client.city,
+      postal_code: client.postal_code,
+    });
+
+    // Set flag to skip auto-fetch
+    skipAutoFetchRef.current = true;
+
+    // Ulož vybraného klienta (ID) pro uložení do payloadu
+    setSelectedClientId(Number(client.id));
+
+    // ✅ IMPORTANT: Determine client type from database
+    const isClientCompany = client.client_type === 'company';
+
+    // Set zakladniData.firma BASED ON SELECTED CLIENT TYPE
+    setZakladniData(prev => ({
+      ...prev,
+      firma: isClientCompany,  // ✅ FIX: Update firma flag based on client type
+    }));
+
+    if (isClientCompany) {
+      // Klient je firma
+      setZakladniData(prev => ({
+        ...prev,
+        nazevFirmy: client.company_name || prev.nazevFirmy,
+        ico: client.ico || prev.ico,
+        dic: client.dic || prev.dic, // DIČ by měl být z client.dic
+        telefon: client.phone || prev.telefon,
+        ulice: client.street || prev.ulice, // Ulice z client.street
+        mesto: client.city || prev.mesto, // Město z client.city
+        psc: client.postal_code || prev.psc,
+        platceDPH: false, // Default
+      }));
+    } else {
+      // Klient je osoba
+      setZakladniData(prev => ({
+        ...prev,
+        jmeno: client.first_name || prev.jmeno,
+        prijmeni: client.last_name || prev.prijmeni,
+        telefon: client.phone || prev.telefon,
+        ulice: client.street || prev.ulice,
+        mesto: client.city || prev.mesto,
+        psc: client.postal_code || prev.psc,
+      }));
+    }
+    setShowClientHistoryModal(null);
+
+    // Reset flag after 100ms to allow manual fetch again
+    setTimeout(() => { skipAutoFetchRef.current = false; }, 100);
+  };
+
+  const handleFetchIco = async (icoToFetch?: string) => {
+    const ico = icoToFetch || zakladniData.ico;
+    const validation = validateIco(ico);
     if (!validation.valid) {
-      Alert.alert('Chyba', validation.message || 'Neplatné IČO');
+      setIcoError(validation.message || 'Neplatné IČO');
       return;
     }
     setIcoLoading(true);
+    setIcoError(null);
     try {
-      const companyData = await fetchCompanyByIco(zakladniData.ico);
+      const companyData = await fetchCompanyByIco(ico);
       if (companyData && companyData.success) {
-        // Aktualizovat všechna pole včetně adresy a platceDPH
+        // Aktualizovat všechna pole včetně adresy, platceDPH a DIČ
         setZakladniData(prev => {
           const updated = {
             ...prev,
@@ -774,6 +998,7 @@ export default function NewPurchaseScreen() {
             ulice: companyData.ulice || prev.ulice,
             mesto: companyData.mesto || prev.mesto,
             psc: companyData.psc?.replace(/\s/g, '') || prev.psc, // Odstranit mezery z PSČ
+            dic: companyData.dic || prev.dic, // Načíst DIČ z API
             platceDPH: companyData.platceDPH || prev.platceDPH,
           };
           return updated;
@@ -784,22 +1009,41 @@ export default function NewPurchaseScreen() {
         if (companyData.ulice) loadedFields.push(`Ulice: ${companyData.ulice}`);
         if (companyData.mesto) loadedFields.push(`Město: ${companyData.mesto}`);
         if (companyData.psc) loadedFields.push(`PSČ: ${companyData.psc}`);
+        if (companyData.dic) loadedFields.push(`DIČ: ${companyData.dic}`);
         loadedFields.push(`Plátce DPH: ${companyData.platceDPH ? 'Ano ✓' : 'Ne'}`);
-        Alert.alert(
+        showAlert(
           'Úspěch', 
           `Data firmy byla načtena z ARES:\n\n${loadedFields.join('\n')}`
         );
       } else {
-        Alert.alert('Chyba', 'Firma s tímto IČO nebyla nalezena');
+        setIcoError('Firma s tímto IČO nebyla nalezena');
       }
     } catch (error: any) {
-      Alert.alert('Chyba', error.message || 'Nepodařilo se načíst data firmy');
+      setIcoError(error.message || 'Nepodařilo se načíst data firmy');
     } finally {
       setIcoLoading(false);
     }
   };
 
   const handleIcoSearch = handleFetchIco;
+
+  const handleModalCreate = (initData: any) => {
+    // Set context data from modal
+    setContextAutomobilData(initData.vehicleData || {});
+    setZakladniData(prev => ({
+      ...prev,
+      jmeno: initData.firstName || '',
+      prijmeni: initData.lastName || '',
+      nazevFirmy: initData.companyName || '',
+      ico: initData.ico || '',
+      telefon: initData.phone || '',
+      firma: initData.isCompany || false,
+    }));
+    // Set context initData so automobil.tsx gets it
+    clearInitData();
+    // Now switch to Automobil tab so component loads and shows the data
+    setSelectedTab('automobil');
+  };
 
   const handleSave = async () => {
     // Reset validation state
@@ -809,29 +1053,34 @@ export default function NewPurchaseScreen() {
       prijmeni: false,
       spz: false,
     });
-    // Validate required fields
-    if (zakladniData.firma) {
-      if (!zakladniData.nazevFirmy.trim()) {
-        setZakladniValidation(prev => ({ ...prev, nazevFirmy: true }));
-        setConfirmMessage('Prosím vyplňte název firmy');
-        setConfirmOnConfirm(() => () => setSelectedTab('zakladni'));
-        setConfirmVisible(true);
-        return;
-      }
-    } else {
-      if (!zakladniData.jmeno.trim() || !zakladniData.prijmeni.trim()) {
-        setZakladniValidation(prev => ({ ...prev, jmeno: !zakladniData.jmeno.trim(), prijmeni: !zakladniData.prijmeni.trim() }));
-        setConfirmMessage('Prosím vyplňte jméno a příjmení klienta');
-        setConfirmOnConfirm(() => () => setSelectedTab('zakladni'));
-        setConfirmVisible(true);
-        return;
-      }
-    }
 
-    if (!automobilData.spz.trim()) {
-      setZakladniValidation(prev => ({ ...prev, spz: true }));
-      setConfirmMessage('Prosím vyplňte SPZ vozidla');
-      setConfirmOnConfirm(() => () => setSelectedTab('automobil'));
+    // 🔴 NEW VALIDATION - Validate all required fields using validatePurchaseFormWithContext
+    const validationData = {
+      coverPhoto: coverPhotoUri ? [coverPhotoUri] : [],
+      inspectionDate: zakladniData.datumProhlidky,
+      clientName: zakladniData.firma ? zakladniData.nazevFirmy : `${zakladniData.jmeno} ${zakladniData.prijmeni}`,
+      clientPhone: zakladniData.telefon,
+      make: automobilData.znacka,
+      model: automobilData.model,
+      motorovaVarianta: automobilData.motorovaVarianta,
+      transmission: automobilData.prevodovka,
+      drivetrain: automobilData.pohon,
+      spz: automobilData.spz,
+      totalAmount: zakladniData.cenaNabidnuta,
+      stk: automobilData.stk,
+      vin: souhrnData.vin,
+    };
+
+    const validationResult = validatePurchaseFormWithContext(validationData, {
+      registered: automobilData.registered ?? true,
+    });
+
+    if (!validationResult.isValid) {
+      const missingFieldsText = validationResult.missingFields.join(', ');
+      setConfirmMessage(`Prosím vyplňte chybějící povinná pole:\n${missingFieldsText}`);
+      setConfirmOnConfirm(() => () => {
+        setConfirmVisible(false);
+      });
       setConfirmVisible(true);
       return;
     }
@@ -877,7 +1126,7 @@ export default function NewPurchaseScreen() {
         clientName: zakladniData.firma 
           ? zakladniData.nazevFirmy 
           : `${zakladniData.jmeno} ${zakladniData.prijmeni}`,
-        clientType: zakladniData.firma ? 'company' : 'person',
+        clientType: zakladniData.firma ? 'company' : 'person',  // ✅ IMPORTANT: Send clientType
 
         purchaseDate: null,
         purchaseTime: null,
@@ -905,48 +1154,71 @@ export default function NewPurchaseScreen() {
         postalCode: zakladniData.psc || null,
         notes: generalNotes || null,
 
+        // Pokud byl vybrán existující klient, pošli jeho ID
+        ...(selectedClientId ? { clientId: selectedClientId } : {}),
+        // CRITICAL: Send company data INCLUDING DIČ regardless of whether clientId is set
+        // This ensures DIČ is saved to the database
+        // ✅ IMPORTANT: Only send fields that have actual values - don't convert empty strings to null!
+        // Empty DIČ/IČO would overwrite existing DB values with NULL
         companyInfo: zakladniData.firma ? {
-          companyName: zakladniData.nazevFirmy,
-          ico: zakladniData.ico || null,
-          dic: null,
+          companyName: zakladniData.nazevFirmy || null,
+          ico: zakladniData.ico && zakladniData.ico.trim() ? zakladniData.ico : null,
+          dic: zakladniData.dic && zakladniData.dic.trim() ? zakladniData.dic : null,
         } : null,
 
         serviceNotes: serviceNotes || null,
         coverPhotoUri: coverPhotoUri || null,
-
-        carDetails: {
-          vin: souhrnData.vin || null,
-          barva: null,
-          palivo: automobilData.motorovaVarianta !== '---Výběr---' ? automobilData.motorovaVarianta : null,
-          make: automobilData.znacka !== '---Výběr---' ? automobilData.znacka : null,
-          model: automobilData.model !== '---Výběr---' ? automobilData.model : null,
-          year: automobilData.doProvozu ? parseInt(automobilData.doProvozu.split('.')[2]) : new Date().getFullYear(),
-          color: null,
-          mileage: automobilData.km ? parseInt(automobilData.km) : null,
-          fuelType: automobilData.motorovaVarianta !== '---Výběr---' ? automobilData.motorovaVarianta : null,
-          engineSize: automobilData.vykon ? `${automobilData.vykon} kW` : null,
-          transmission: automobilData.prevodovka !== '---Výběr---' ? automobilData.prevodovka : null,
-          bodyType: null,
-          driveType: automobilData.pohon !== '---Výběr---' ? automobilData.pohon : null,
-          stk: automobilData.stk || null,
-          firstRegistration: automobilData.doProvozu || null,
-          isImport: automobilData.dovoz,
-          isFirstOwner: automobilData.prvniMajitel,
-          hasServiceBook: automobilData.servisniKnizka,
-          hasSecurityScrews: false,
-          hasAiWheels: false,
-          pocetVlastniku: automobilData.pocetVlastniku ? parseInt(automobilData.pocetVlastniku) : null,
-          pocetProvozovatelu: automobilData.pocetProvozovatelu ? parseInt(automobilData.pocetProvozovatelu) : null,
-          cebia: automobilData.cebia,
-          caVertical: automobilData.caVertical,
-        },
-
-        componentStatuses: stavSoucastiData.map(item => ({
-          component: item.component,
-          status: item.status,
-          notes: item.notes || undefined,
-        })),
       };
+
+      // ✅ DEBUG: Log actual payload being sent to backend
+      console.log('performSave - Payload being sent to API:', {
+        clientName: payload.clientName,
+        clientType: payload.clientType,
+        selectedClientId,
+        companyInfo: payload.companyInfo,
+        zakladniData_ico: zakladniData.ico,
+        zakladniData_dic: zakladniData.dic,
+        zakladniData_ulice: zakladniData.ulice,
+        zakladniData_mesto: zakladniData.mesto,
+      });
+
+      // ✅ ADD MISSING carDetails AND componentStatuses TO PAYLOAD
+      payload.carDetails = {
+        vin: souhrnData.vin || null,
+        barva: null,
+        palivo: automobilData.motorovaVarianta !== '---Výběr---' ? automobilData.motorovaVarianta : null,
+        make: automobilData.znacka !== '---Výběr---' ? automobilData.znacka : null,
+        model: automobilData.model !== '---Výběr---' ? automobilData.model : null,
+        year: automobilData.doProvozu ? parseInt(automobilData.doProvozu.split('.')[2]) : new Date().getFullYear(),
+        color: null,
+        mileage: automobilData.km ? parseInt(automobilData.km) : null,
+        fuelType: automobilData.motorovaVarianta !== '---Výběr---' ? automobilData.motorovaVarianta : null,
+        engineSize: automobilData.vykon ? `${automobilData.vykon} kW` : null,
+        transmission: automobilData.prevodovka !== '---Výběr---' ? automobilData.prevodovka : null,
+        bodyType: null,
+        driveType: automobilData.pohon !== '---Výběr---' ? automobilData.pohon : null,
+        stk: automobilData.stk || null,
+        firstRegistration: automobilData.doProvozu || null,
+        isImport: automobilData.dovoz,
+        isFirstOwner: automobilData.prvniMajitel,
+        hasServiceBook: automobilData.servisniKnizka,
+        hasSecurityScrews: false,
+        hasAiWheels: false,
+        pocetVlastniku: automobilData.pocetVlastniku ? parseInt(automobilData.pocetVlastniku) : null,
+        pocetProvozovatelu: automobilData.pocetProvozovatelu ? parseInt(automobilData.pocetProvozovatelu) : null,
+        cebia: automobilData.cebia,
+        caVertical: automobilData.caVertical,
+        registered: automobilData.registered ?? true,
+        spz: automobilData.spz || null,
+      };
+
+      payload.componentStatuses = stavSoucastiData.map(item => ({
+        component: item.component,
+        status: item.status,
+        notes: item.notes || undefined,
+      }));
+
+      payload.paintThickness = paintThickness;
 
       const pendingId = addPendingUpload(payload as any);
       await clearDraftData();
@@ -962,7 +1234,7 @@ export default function NewPurchaseScreen() {
         coverPhotoUri,
       );
     } catch (error: any) {
-      Alert.alert('Chyba', error.message || 'Nepodařilo se uložit výkup');
+      showAlert('Chyba', error.message || 'Nepodařilo se uložit výkup');
       setLoading(false);
     }
   };
@@ -987,13 +1259,13 @@ export default function NewPurchaseScreen() {
       }
 
 
-      // 2️⃣ UPLOAD COVER PHOTO FIRST if exists
+      // 2️⃣ UPLOAD COVER PHOTO FIRST if exists - use SEPARATE endpoint!
       let uploadedCoverUri: string | undefined;
       if (coverPhotoUri) {
         try {
-          const coverResult = await apiService.uploadPhotos(serverId, [coverPhotoUri]);
-          if (coverResult?.files && coverResult.files.length > 0) {
-            uploadedCoverUri = coverResult.files[0];
+          const coverResult = await apiService.uploadCoverPhoto(serverId, coverPhotoUri);
+          if (coverResult?.success && coverResult.uri) {
+            uploadedCoverUri = coverResult.uri;
           }
         } catch (e) {
         }
@@ -1031,14 +1303,12 @@ export default function NewPurchaseScreen() {
       const savedPurchase = await apiService.getPurchaseById(serverId);
       if (savedPurchase.carDetails) {
       }
-      
       // 7️⃣ UPDATE CONTEXT so UI shows latest data
       if (savedPurchase) {
         // savedPurchase je ALREADY transformován z getPurchaseById
         // Jen updatuj všechna pole aby si UI sebralo latest data
         updatePurchase(serverId, savedPurchase);
       }
-      
       markUploadSuccess(pendingId);
     } catch (error: any) {
       markUploadError(pendingId, error?.message || 'Chyba při nahrávání');
@@ -1084,7 +1354,7 @@ export default function NewPurchaseScreen() {
               onChangeText={onChangeText}
               placeholder={options?.placeholder}
               placeholderTextColor={theme.textTertiary}
-              keyboardType={options?.keyboardType || 'default'}
+              keyboardType={resolveKeyboardType(options?.keyboardType)}
               returnKeyType="done"
               editable={options?.editable !== false}
             />
@@ -1128,7 +1398,7 @@ export default function NewPurchaseScreen() {
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor="#8E8E93"
-        keyboardType={keyboardType || 'default'}
+        keyboardType={resolveKeyboardType(keyboardType)}
       />
     );
   };
@@ -1170,12 +1440,37 @@ export default function NewPurchaseScreen() {
 
   const getAvailableModels = () => {
     if (!automobilData.znacka || automobilData.znacka === '---Výběr---') return ['---Výběr---'];
-    const models = VEHICLE_MODELS[automobilData.znacka] || [];
-    return ['---Výběr---', ...models];
+    // Find make by name from context makes array
+    const make = findMakeByName(automobilData.znacka);
+    if (!make) return ['---Výběr---'];
+    // Use getModelNamesByMakeId from the hook (already called above)
+    // CRITICAL: Trim all model names to ensure exact matching in SelectionPicker
+    const modelNames = getModelNamesByMakeId(make.id);
+    const trimmedModels = modelNames.map(m => m.trim());
+    return ['---Výběr---', ...trimmedModels];
   };
 
   const handleMakeChange = (znacka: string) => {
     setAutomobilData(prev => ({ ...prev, znacka, model: '---Výběr---' }));
+  };
+
+  // Prepare options for makes selection with sections for top makes and other makes
+  const getMakeOptions = () => {
+    const topMakes = getTopMakes();
+    const otherMakes = getOtherMakes();
+
+    // Build options array with section markers that SelectionPicker recognizes
+    const options: string[] = ['---Výběr---'];
+
+    if (topMakes.length > 0) {
+      options.push('___TOP_BRANDS_START___');
+      options.push(...topMakes.map(m => m.name));
+      options.push('___TOP_BRANDS_END___');
+    }
+
+    options.push(...otherMakes.map(m => m.name));
+
+    return options;
   };
 
   const updateComponentStatus = (index: number, status: ComponentStatus['status']) => {
@@ -1198,7 +1493,7 @@ export default function NewPurchaseScreen() {
     <ScrollView ref={zakladniRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
       {/* Section: Úvodní fotka vozidla - na samém začátku */}
       <View style={[styles.photoSection, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        <Text style={[styles.sectionTitle, { color: theme.text }]}>Úvodní fotka vozidla</Text>
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>Úvodní fotka vozidla <Text style={styles.required}>*</Text></Text>
         <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>
           Vyfotit fotku vozidla pro náhled v seznamu výkupů
         </Text>
@@ -1237,7 +1532,7 @@ export default function NewPurchaseScreen() {
               style={[styles.coverPhotoActionButton, { backgroundColor: theme.inputBackground, borderColor: theme.border }]}
               onPress={async () => {
                 const result = await ImagePicker.launchImageLibraryAsync({
-                  mediaTypes: ['images'],
+                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
                   allowsEditing: true,
                   aspect: [16, 9],
                   quality: 0.8,
@@ -1258,7 +1553,7 @@ export default function NewPurchaseScreen() {
 
       {/* Removed Stav selection picker as per update instructions */}
 
-      {/* Display current user as buyer */}
+      {/* Display current user as buyer - required field */}
       <View style={[styles.inputGroup, { backgroundColor: theme.card, padding: 12, borderRadius: 10 }]}>
         <Text style={[styles.label, { color: theme.textSecondary }]}>Výkupčí</Text>
         <Text style={[styles.buyerName, { color: theme.text }]}>
@@ -1269,7 +1564,7 @@ export default function NewPurchaseScreen() {
       </View>
 
       <DatePickerField
-        label="Datum prohlídky"
+        label="Datum prohlídky *"
         value={zakladniData.datumProhlidky}
         onChange={(dateStr) => setZakladniData(prev => ({ ...prev, datumProhlidky: dateStr }))}
         placeholder="dd.mm.yyyy hh:mm"
@@ -1298,42 +1593,69 @@ export default function NewPurchaseScreen() {
       )}
 
       {renderToggleField(
-        'Plátce DPH',
+        'Odpočet DPH',
         zakladniData.platceDPH,
         (value) => setZakladniData(prev => ({ ...prev, platceDPH: value }))
       )}
       {zakladniData.firma ? (
         <>
-          {renderInputField(
-            'Název firmy', 
-            zakladniData.nazevFirmy, 
-            (text) => setZakladniData(prev => ({ ...prev, nazevFirmy: text })),
-            { placeholder: 'Zadejte název firmy...', error: zakladniValidation.nazevFirmy }
-          )}
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ flex: 1 }}>
-              {renderInputField(
-                'IČO', 
-                zakladniData.ico, 
-                (text) => setZakladniData(prev => ({ ...prev, ico: text })),
-                { placeholder: 'Zadejte IČO...' }
-              )}
+          {/* Název firmy Input with History Button */}
+          <View style={[styles.icoInputGroup, { marginBottom: 16 }]}>
+            <Text style={[styles.label, { color: theme.textSecondary }]}>Název firmy *</Text>
+            <View style={styles.icoInputRow}>
+              <TextInput
+                style={[styles.input, { flex: 1, backgroundColor: theme.inputBackground, color: theme.text, borderColor: zakladniValidation.nazevFirmy ? '#FF3B30' : theme.border }]}
+                value={zakladniData.nazevFirmy}
+                onChangeText={(t) => setZakladniData(prev => ({ ...prev, nazevFirmy: t }))}
+                placeholder="Zadejte název firmy..."
+                placeholderTextColor={theme.textTertiary}
+              />
+              <TouchableOpacity 
+                style={[styles.icoSearchBtn, { backgroundColor: theme.accent }]}
+                onPress={() => setShowClientHistoryModal('company')}
+              >
+                <Ionicons name="list" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={[styles.icoSearchButton, icoLoading && styles.icoSearchButtonDisabled]}
-              onPress={handleIcoSearch}
-              disabled={icoLoading || !zakladniData.ico.trim()}
-            >
-              {icoLoading ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <>
-                  <Ionicons name="search" size={18} color="#FFFFFF" />
-                  <Text style={styles.icoSearchButtonText}>Hledat</Text>
-                </>
-              )}
-            </TouchableOpacity>
           </View>
+          {/* IČO Input with Search Button */}
+          <View style={[styles.icoInputGroup, { marginBottom: 16 }]}>
+            <Text style={[styles.label, { color: theme.textSecondary }]}>IČO</Text>
+            <View style={styles.icoInputRow}>
+              <TextInput
+                style={[styles.input, { flex: 1, backgroundColor: theme.inputBackground, color: theme.text, borderColor: icoError ? '#FF3B30' : theme.border }]}
+                value={zakladniData.ico}
+                onChangeText={(t) => setZakladniData(prev => ({ ...prev, ico: t }))}
+                placeholder="Zadejte IČO..."
+                placeholderTextColor={theme.textTertiary}
+                maxLength={8}
+                keyboardType={resolveKeyboardType('numeric')}
+              />
+              <TouchableOpacity
+                style={[styles.icoSearchBtn, { backgroundColor: theme.accent }, icoLoading && styles.icoSearchBtnDisabled]}
+                onPress={() => handleFetchIco(zakladniData.ico)}
+                disabled={icoLoading || !zakladniData.ico.trim()}
+              >
+                {icoLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="search" size={18} color="#FFFFFF" />
+                )}
+              </TouchableOpacity>
+            </View>
+            {icoError && (
+              <Text style={[styles.errorText, { color: '#FF3B30', marginTop: 6 }]}>
+                {icoError}
+              </Text>
+            )}
+          </View>
+
+          {renderInputField(
+            'DIČ', 
+            zakladniData.dic, 
+            (text) => setZakladniData(prev => ({ ...prev, dic: text })),
+            { placeholder: 'Zadejte DIČ...', keyboardType: 'numeric' }
+          )}
           {/* Replace renderInputField for Telefon with PhoneInput */}
           <PhoneInput
             label="Telefon"
@@ -1372,17 +1694,30 @@ export default function NewPurchaseScreen() {
       ) : (
         <>
           {renderInputField(
-            'Jméno', 
+            'Jméno *', 
             zakladniData.jmeno, 
             (text) => setZakladniData(prev => ({ ...prev, jmeno: text })),
             { placeholder: 'Zadejte jméno...', error: zakladniValidation.jmeno }
           )}
-          {renderInputField(
-            'Příjmení', 
-            zakladniData.prijmeni, 
-            (text) => setZakladniData(prev => ({ ...prev, prijmeni: text })),
-            { placeholder: 'Zadejte příjmení...', error: zakladniValidation.prijmeni }
-          )}
+          {/* Příjmení Input with History Button */}
+          <View style={[styles.icoInputGroup, { marginBottom: 16 }]}>
+            <Text style={[styles.label, { color: theme.textSecondary }]}>Příjmení *</Text>
+            <View style={styles.icoInputRow}>
+              <TextInput
+                style={[styles.input, { flex: 1, backgroundColor: theme.inputBackground, color: theme.text, borderColor: theme.border }]}
+                value={zakladniData.prijmeni}
+                onChangeText={(t) => setZakladniData(prev => ({ ...prev, prijmeni: t }))}
+                placeholder="Zadejte příjmení..."
+                placeholderTextColor={theme.textTertiary}
+              />
+              <TouchableOpacity 
+                style={[styles.icoSearchBtn, { backgroundColor: theme.accent }]}
+                onPress={() => setShowClientHistoryModal('person')}
+              >
+                <Ionicons name="list" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
           {/* Replace renderInputField for Telefon with PhoneInput */}
           <PhoneInput
             label="Telefon"
@@ -1408,9 +1743,16 @@ export default function NewPurchaseScreen() {
     <ScrollView ref={automobilRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
       <Text style={[styles.sectionTitle, { color: theme.text }]}>Informace o vozidle</Text>
 
+      {/* ✅ TOGGLE REGISTROVÁNO - NA ZAČÁTKU SEKCE */}
+      {renderToggleField(
+        'Registrováno',
+        automobilData.registered ?? true,
+        (value) => setAutomobilData(prev => ({ ...prev, registered: value }))
+      )}
+
       {/* VIN Input with Lookup Button - at the top */}
       <View style={[styles.vinInputContainer, { backgroundColor: theme.card, borderColor: theme.border }]}>
-        <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>VIN</Text>
+        <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>VIN *</Text>
         <View style={styles.vinInputRow}>
           <TextInput
             style={[styles.vinTextInput, { backgroundColor: theme.inputBackground, color: theme.text, borderColor: theme.border }]}
@@ -1442,16 +1784,16 @@ export default function NewPurchaseScreen() {
       </View>
 
       <SelectionPicker
-        label="Značka"
+        label="Značka *"
         value={automobilData.znacka}
-        options={['---Výběr---', ...VEHICLE_MAKES]}
+        options={getMakeOptions()}
         onSelect={handleMakeChange}
         placeholder="---Výběr---"
         error={automobilData.znacka === '---Výběr---'}
       />
 
       <SelectionPicker
-        label="Model"
+        label="Model *"
         value={automobilData.model}
         options={getAvailableModels()}
         onSelect={(value) => setAutomobilData(prev => ({ ...prev, model: value }))}
@@ -1459,16 +1801,8 @@ export default function NewPurchaseScreen() {
         error={automobilData.model === '---Výběr---'}
       />
 
-      <SpzInput
-        label="SPZ"
-        value={automobilData.spz}
-        onChangeText={(text) => setAutomobilData(prev => ({ ...prev, spz: text }))}
-        placeholder="1A2 3456"
-        error={!automobilData.spz.trim()}
-      />
-
       <WheelPicker
-        label="Motorová varianta"
+        label="Motorová varianta *"
         value={automobilData.motorovaVarianta}
         options={MOTOROVA_VARIANTA}
         onSelect={(value) => setAutomobilData(prev => ({ ...prev, motorovaVarianta: value }))}
@@ -1483,14 +1817,6 @@ export default function NewPurchaseScreen() {
         { keyboardType: 'numeric' }
       )}
 
-      <DatePickerField
-        label="STK"
-        value={automobilData.stk}
-        onChange={(dateStr) => setAutomobilData(prev => ({ ...prev, stk: dateStr }))}
-        placeholder="dd.mm.yyyy"
-        error={!automobilData.stk.trim()}
-      />
-
       {renderInputField(
         'Výkon (kW)', 
         automobilData.vykon, 
@@ -1499,7 +1825,7 @@ export default function NewPurchaseScreen() {
       )}
 
       <SelectionPicker
-        label="Převodovka"
+        label="Převodovka *"
         value={automobilData.prevodovka}
         options={PREVODOVKA}
         onSelect={(value) => setAutomobilData(prev => ({ ...prev, prevodovka: value }))}
@@ -1508,7 +1834,7 @@ export default function NewPurchaseScreen() {
       />
 
       <SelectionPicker
-        label="Pohon"
+        label="Pohon *"
         value={automobilData.pohon}
         options={POHON}
         onSelect={(value) => setAutomobilData(prev => ({ ...prev, pohon: value }))}
@@ -1524,29 +1850,57 @@ export default function NewPurchaseScreen() {
         error={!automobilData.doProvozu.trim()}
       />
 
-      {renderInputField(
-        'Počet vlastníků', 
-        automobilData.pocetVlastniku, 
-        (text) => setAutomobilData(prev => ({ ...prev, pocetVlastniku: text })),
-        { placeholder: '', keyboardType: 'numeric', showWarning: true }
+      {/* ✅ SKRYTÉ POLE - SPZ, STK, Počet vlastníků, Počet provozovatelů, První majitel */}
+      {/* IMPORTANT: Podmínit renderování polí (nejen opacitu) - musíme fyzicky odebrat komponenty */}
+      {(automobilData.registered ?? true) && (
+        <Animated.View style={[fadeAnimStyle, { pointerEvents: 'auto', overflow: 'hidden' }]}>
+          {/* SPZ */}
+          <SpzInput
+            label="SPZ *"
+            value={automobilData.spz}
+            onChangeText={(text) => setAutomobilData(prev => ({ ...prev, spz: text }))}
+            placeholder="1A2 3456"
+            error={!automobilData.spz.trim()}
+          />
+
+          {/* STK */}
+          <DatePickerField
+            label="STK *"
+            value={automobilData.stk}
+            onChange={(dateStr) => setAutomobilData(prev => ({ ...prev, stk: dateStr }))}
+            placeholder="dd.mm.yyyy"
+            error={!automobilData.stk.trim()}
+          />
+
+          {/* Počet vlastníků */}
+          {renderInputField(
+            'Počet vlastníků', 
+            automobilData.pocetVlastniku, 
+            (text) => setAutomobilData(prev => ({ ...prev, pocetVlastniku: text })),
+            { placeholder: '', keyboardType: 'numeric', showWarning: true }
+          )}
+
+          {/* Počet provozovatelů */}
+          {renderInputField(
+            'Počet provozovatelů', 
+            automobilData.pocetProvozovatelu, 
+            (text) => setAutomobilData(prev => ({ ...prev, pocetProvozovatelu: text })),
+            { placeholder: '', keyboardType: 'numeric', showWarning: true }
+          )}
+
+          {/* První majitel */}
+          {renderToggleField(
+            'První majitel',
+            automobilData.prvniMajitel,
+            (value) => setAutomobilData(prev => ({ ...prev, prvniMajitel: value }))
+          )}
+        </Animated.View>
       )}
 
-      {renderInputField(
-        'Počet provozovatelů', 
-        automobilData.pocetProvozovatelu, 
-        (text) => setAutomobilData(prev => ({ ...prev, pocetProvozovatelu: text })),
-        { placeholder: '', keyboardType: 'numeric', showWarning: true }
-      )}
       {renderToggleField(
         'Dovoz',
         automobilData.dovoz,
         (value) => setAutomobilData(prev => ({ ...prev, dovoz: value }))
-      )}
-
-      {renderToggleField(
-        'První majitel',
-        automobilData.prvniMajitel,
-        (value) => setAutomobilData(prev => ({ ...prev, prvniMajitel: value }))
       )}
 
       {renderToggleField(
@@ -1591,7 +1945,7 @@ export default function NewPurchaseScreen() {
       )}
 
       {renderToggleField(
-        'CaVertical',
+        'CarVertical',
         automobilData.caVertical,
         (value) => setAutomobilData(prev => ({ ...prev, caVertical: value }))
       )}
@@ -1599,8 +1953,19 @@ export default function NewPurchaseScreen() {
   );
 
   const renderStavSoucastiContent = () => (
-    <ScrollView ref={stavSoucastiRef} style={styles.tabContent} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.sectionTitle, { color: theme.text }]}>Hodnocení stavu součástí vozidla</Text>
+    <KeyboardAvoidingView 
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={80}
+    >
+      <ScrollView 
+        ref={stavSoucastiRef} 
+        style={styles.tabContent} 
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingBottom: 400 }}
+      >
+        <Text style={[styles.sectionTitle, { color: theme.text }]}>Hodnocení stavu součástí vozidla</Text>
       <Text style={[styles.sectionDescription, { color: theme.textSecondary }]}>Vyhodnoťte stav každé součásti</Text>
 
       {stavSoucastiData.map((item, index) => (
@@ -1661,11 +2026,28 @@ export default function NewPurchaseScreen() {
             placeholder='Zapište poznámku (např. "lehké pískání při brzdění")'
             placeholderTextColor={theme.textTertiary}
             multiline
-            numberOfLines={3}
+            numberOfLines={4}
             textAlignVertical="top"
           />
         </View>
       ))}
+
+      {/* Tloušťky laku */}
+      <TouchableOpacity
+        style={[styles.componentContainer, styles.paintThicknessRow, { backgroundColor: theme.card }]}
+        onPress={() => setShowPaintThickness(true)}
+      >
+        <Ionicons name="color-fill-outline" size={20} color={theme.text} />
+        <View style={styles.paintThicknessTexts}>
+          <Text style={[styles.componentName, { color: theme.text }]}>Tloušťky laku</Text>
+          <Text style={[styles.sectionDescription, { color: theme.textSecondary, marginBottom: 0 }]}>
+            {paintThickness.length > 0
+              ? `Změřeno ${paintThickness.length} z 11 panelů`
+              : 'Zatím nezměřeno'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={theme.textTertiary} />
+      </TouchableOpacity>
 
       <View style={styles.generalNotesSection}>
         <Text style={[styles.sectionTitle, { color: theme.text }]}>Obecné poznámky</Text>
@@ -1676,7 +2058,7 @@ export default function NewPurchaseScreen() {
           placeholder="Celkové poznámky a pozorování stavu vozidla..."
           placeholderTextColor={theme.textTertiary}
           multiline
-          numberOfLines={4}
+          numberOfLines={6}
           textAlignVertical="top"
         />
       </View>
@@ -1690,11 +2072,12 @@ export default function NewPurchaseScreen() {
           placeholder="Servisní poznámka a doporučení..."
           placeholderTextColor={theme.textTertiary}
           multiline
-          numberOfLines={4}
+          numberOfLines={6}
           textAlignVertical="top"
         />
       </View>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 
   const renderFotoVadyContent = () => {
@@ -2000,6 +2383,23 @@ export default function NewPurchaseScreen() {
         }}
         onCancel={() => setCloseConfirmVisible(false)}
       />
+
+      {/* Client History Modal */}
+      <ClientHistoryModal
+        visible={showClientHistoryModal !== null}
+        type={showClientHistoryModal || 'company'}
+        onSelect={handleSelectClientFromHistory}
+        onClose={() => setShowClientHistoryModal(null)}
+      />
+
+      {/* Tloušťky laku - drží se ve stavu formuláře, do DB jde až se založením výkupu */}
+      <PaintThicknessModal
+        visible={showPaintThickness}
+        onClose={() => setShowPaintThickness(false)}
+        readings={paintThickness}
+        onSave={setPaintThickness}
+        startInEditMode
+      />
     </View>
   );
 }
@@ -2087,6 +2487,25 @@ const styles = StyleSheet.create({
     top: '50%',
     transform: [{ translateY: -12 }],
   },
+  icoInputGroup: { 
+    marginBottom: 16, 
+    position: 'relative' 
+  },
+  icoInputRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 8 
+  },
+  icoSearchBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  icoSearchBtnDisabled: { 
+    opacity: 0.6 
+  },
   icoSearchButton: {
     marginLeft: 8,
     flexDirection: 'row',
@@ -2099,6 +2518,10 @@ const styles = StyleSheet.create({
   },
   icoSearchButtonDisabled: { opacity: 0.5 },
   icoSearchButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  errorText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
   switchRow: { 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -2130,9 +2553,15 @@ const styles = StyleSheet.create({
     padding: 16, 
     borderRadius: 12 
   },
-  componentHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
+  paintThicknessRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  paintThicknessTexts: { flex: 1, gap: 2 },
+  componentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center', 
     marginBottom: 8 
   },

@@ -1,8 +1,8 @@
-import { apiService } from '@/services/apiService';
+import { apiService, transformApiToCamelCase } from '@/services/apiService';
 import { AresCompanyData } from '@/services/aresApi';
 import { VehicleDataResponse } from '@/services/vehicleDataApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { defaultPurchaseFilter } from '../constants/mockData';
 import { Purchase, PurchaseFilter, PurchaseState } from '../constants/types';
 import { useAuth } from './AuthContext';
@@ -16,6 +16,7 @@ interface InitialPurchaseData {
   ico?: string;
   vehicleData?: VehicleDataResponse;
   companyData?: AresCompanyData;
+  clientId?: number; // ✅ ADDED: clientId from history
 }
 
 interface AutomobilData {
@@ -40,6 +41,7 @@ interface AutomobilData {
   cebia: boolean;
   caVertical: boolean;
   protiucet: boolean;
+  registered?: boolean;
 }
 interface PendingUpload {
   id: string;
@@ -53,15 +55,24 @@ interface PurchaseContextType {
   pendingUploads: PendingUpload[];
   filteredPurchases: Purchase[];
   filter: PurchaseFilter;
+  searchQuery: string;
+  isSearching: boolean;
+  loadError: string | null;
   loading: boolean;
   refreshing: boolean;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+  currentPage: number;
+  pageSize: number;
   initData?: InitialPurchaseData;
   automobilData?: AutomobilData;
   generalNotes: string;
   serviceNotes: string;
   setFilter: (filter: PurchaseFilter) => void;
   clearFilter: () => void;
+  setSearchQuery: (query: string) => void;
   refreshPurchases: () => Promise<void>;
+  loadMorePurchases: () => Promise<void>;
   addPurchase: (purchase: Purchase) => void;
   addPendingUpload: (purchase: Purchase) => string;
   updatePurchaseProgress: (id: string, progress: number) => void;
@@ -90,6 +101,17 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
   const [filter, setFilterState] = useState<PurchaseFilter>(defaultPurchaseFilter);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [currentPage, setCurrentPage] = useState(0);
+  const pageSize = 20; // 20 items per page
+  // Hledání běží na serveru nad všemi výkupy, ne jen nad načtenými stránkami
+  const [searchQuery, setSearchQueryState] = useState('');
+  const [activeSearch, setActiveSearch] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const activeSearchRef = useRef('');
+  const loadRequestId = useRef(0);
   const [initData, setInitData] = useState<InitialPurchaseData | undefined>(undefined);
   const [automobilData, setAutomobilData] = useState<AutomobilData | undefined>(undefined);
   const [generalNotes, setGeneralNotes] = useState('');
@@ -100,22 +122,58 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     loadSavedFilter();
   }, []);
 
+  // Načte první stránku pro daný hledaný výraz. Starší odpovědi se zahazují,
+  // aby při rychlém psaní nepřepsaly výsledek posledního dotazu.
+  const loadFirstPage = async (search: string) => {
+    const requestId = ++loadRequestId.current;
+    try {
+      const result = await apiService.fetchPurchasesPage(0, pageSize, search);
+      if (requestId !== loadRequestId.current) return;
+      setPurchases(result.items);
+      setCurrentPage(0);
+      setHasMore(result.hasMore);
+      setLoadError(null);
+    } catch (error: any) {
+      if (requestId !== loadRequestId.current) return;
+      // Chybu ukážeme - prázdný seznam by vypadal jako "nic nenalezeno"
+      setLoadError(error?.message || 'Načtení se nezdařilo');
+      setPurchases([]);
+      setHasMore(false);
+    } finally {
+      if (requestId === loadRequestId.current) setIsSearching(false);
+    }
+  };
+
   // Sync from API when component mounts (after token is available)
   // Add delay to ensure token is restored from AsyncStorage
   useEffect(() => {
     const timer = setTimeout(() => {
-      apiService.getPurchases()
-        .then((apiPurchases: any) => {
-          setPurchases(apiPurchases);
-        })
-        .catch(() => {
-          // Bez fallback - ukaž prázdný seznam
-          setPurchases([]);
-        });
+      loadFirstPage(activeSearchRef.current);
     }, 500); // 500ms delay to allow token restoration
 
     return () => clearTimeout(timer);
   }, []);
+
+  // Debounce psaní v hledání
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (trimmed === activeSearch) return;
+    setIsSearching(true);
+    const timer = setTimeout(() => setActiveSearch(trimmed), 350);
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeSearch]);
+
+  // Změna hledaného výrazu = nový dotaz na server od první stránky
+  const didMountSearch = useRef(false);
+  useEffect(() => {
+    activeSearchRef.current = activeSearch;
+    if (!didMountSearch.current) {
+      didMountSearch.current = true;
+      return;
+    }
+    setIsSearching(true);
+    loadFirstPage(activeSearch);
+  }, [activeSearch]);
 
   // Apply filters to purchases
   const filteredPurchases = purchases.filter(purchase => {
@@ -217,17 +275,34 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
 
   const refreshPurchases = async () => {
     setRefreshing(true);
-    try {
-      const apiPurchases = await apiService.getPurchases();
-      setPurchases(apiPurchases);
-    } catch {
-      setPurchases([]);
-    }
+    await loadFirstPage(activeSearchRef.current);
     setRefreshing(false);
+  };
+
+  const loadMorePurchases = async () => {
+    if (isLoadingMore || !hasMore) return;
+
+    setIsLoadingMore(true);
+    const searchAtStart = activeSearchRef.current;
+    try {
+      const nextPage = currentPage + 1;
+      const result = await apiService.fetchPurchasesPage(nextPage, pageSize, searchAtStart);
+      // Hledaný výraz se mezitím změnil - výsledky už nepatří k aktuálnímu seznamu
+      if (searchAtStart !== activeSearchRef.current) return;
+      setPurchases(prev => [...prev, ...result.items]);
+      setCurrentPage(nextPage);
+      setHasMore(result.hasMore);
+    } catch (error) {
+      // Error handled silently
+    } finally {
+      setIsLoadingMore(false);
+    }
   };
 
   const addPurchase = (purchase: Purchase) => {
     setPurchases(prev => [purchase, ...prev]);
+    // Reset pagination when new purchase is added
+    setCurrentPage(0);
   };
 
   const setInitDataFn = (data: InitialPurchaseData) => {
@@ -306,14 +381,30 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
 
   const updatePurchase = async (id: string, updates: Partial<Purchase>) => {
     try {
-      await apiService.updatePurchase(id, updates);
+      const result = await apiService.updatePurchase(id, updates);
+      // API returns { success: true, data: row } - extract the data
+      const purchaseData = result?.data || result;
+      
+      // If API returns updated purchase data, use that (it has all carDetails, etc)
+      if (purchaseData && purchaseData.id) {
+        // API response already comes in snake_case from PHP, need to transform to camelCase
+        const transformed = transformApiToCamelCase(purchaseData);
+        setPurchases(prev =>
+          prev.map(p => p.id === id ? transformed : p)
+        );
+      } else {
+        // Fallback: optimistic update
+        setPurchases(prev =>
+          prev.map(p => p.id === id ? { ...p, ...updates } : p)
+        );
+      }
+    } catch (error) {
+      // Error handled silently
+      // Still update local state even on error for optimistic UI updates
       setPurchases(prev =>
         prev.map(p => p.id === id ? { ...p, ...updates } : p)
       );
-    } catch {
-      setPurchases(prev =>
-        prev.map(p => p.id === id ? { ...p, ...updates } : p)
-      );
+      throw error;
     }
   };
 
@@ -334,15 +425,24 @@ export function PurchaseProvider({ children }: { children: React.ReactNode }) {
     pendingUploads,
     filteredPurchases,
     filter,
+    searchQuery,
+    isSearching,
+    loadError,
     loading,
     refreshing,
+    isLoadingMore,
+    hasMore,
+    currentPage,
+    pageSize,
     initData,
     automobilData,
     generalNotes,
     serviceNotes,
     setFilter,
     clearFilter,
+    setSearchQuery: setSearchQueryState,
     refreshPurchases,
+    loadMorePurchases,
     addPurchase,
     addPendingUpload,
     updatePurchaseProgress,

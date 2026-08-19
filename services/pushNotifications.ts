@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { SchedulableTriggerInputTypes } from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 
 /**
  * PUSH NOTIFICATIONS SERVICE
@@ -138,6 +138,35 @@ export async function registerPushTokenWithBackend(
       error: `Request failed: ${errorMsg}` 
     };
   }
+}
+
+/**
+ * Vytáhne ID výkupu z notifikace, aby šlo po klepnutí otevřít konkrétní vozidlo.
+ *
+ * Backend posílá `purchaseId` v datech notifikace (PurchaseAPI.php - nový výkup
+ * i změna stavu). Podporujeme i `purchase_id`, kdyby některý endpoint posílal
+ * snake_case, a hodnotu vracíme jako string, protože routa /purchase/[id] ji
+ * takhle očekává.
+ */
+export function getPurchaseIdFromData(
+  data: Record<string, any> | null | undefined
+): string | null {
+  if (!data) return null;
+
+  const raw = data.purchaseId ?? data.purchase_id;
+  if (raw === null || raw === undefined || raw === '') return null;
+
+  const id = String(raw).trim();
+  return id.length > 0 ? id : null;
+}
+
+/** Totéž pro notifikaci z expo-notifications (klepnutí na systémový push). */
+export function getPurchaseIdFromNotification(
+  notification: Notifications.Notification | null | undefined
+): string | null {
+  return getPurchaseIdFromData(
+    notification?.request?.content?.data as Record<string, any> | undefined
+  );
 }
 
 /**

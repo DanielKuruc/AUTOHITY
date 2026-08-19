@@ -1,4 +1,6 @@
 import { NotificationCenterScreen } from '@/components/NotificationCenter';
+import { ScreenHeader } from '@/components/ScreenHeader';
+import { SidebarBrand } from '@/components/SidebarBrand';
 import { SidebarUserSection } from '@/components/SidebarUserSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -18,22 +20,14 @@ export default function NotificationsScreen() {
   const { user: currentUser } = useAuth();
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={[isSplitView ? styles.splitLayout : styles.stackedLayout]}>
         {/* LEFT SIDEBAR - TABLET ONLY */}
         {isSplitView && (
           <View style={[styles.sidebar, { backgroundColor: theme.surface, borderRightColor: theme.border }]}>
+            <SidebarBrand />
+
             <ScrollView style={styles.sidebarScroll} showsVerticalScrollIndicator={false}>
-              <TouchableOpacity 
-                style={[styles.sidebarItem, { backgroundColor: theme.accent }]}
-                onPress={() => router.push('/(tabs)')}
-              >
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <Text style={styles.sidebarItemText}>Nový výkup</Text>
-              </TouchableOpacity>
-
-              <View style={[styles.sidebarDivider, { backgroundColor: theme.border }]} />
-
               <TouchableOpacity 
                 style={[styles.sidebarNavItem, { backgroundColor: theme.inputBackground }]}
                 onPress={() => router.push('/(tabs)')}
@@ -76,6 +70,9 @@ export default function NotificationsScreen() {
 
         {/* CONTENT */}
         <View style={{ flex: 1 }}>
+          {/* Header */}
+          <ScreenHeader title="Notifikace" />
+
           <NotificationCenterScreen />
         </View>
       </View>
@@ -97,28 +94,14 @@ const styles = StyleSheet.create({
   sidebar: {
     width: 220,
     borderRightWidth: 1,
+    paddingVertical: 16,
     paddingHorizontal: 12,
-    paddingBottom: 0,
     flexDirection: 'column',
   },
   sidebarScroll: {
     flex: 1,
     paddingTop: 16,
     paddingBottom: 8,
-  },
-  sidebarItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 12,
-    marginHorizontal: 4,
-  },
-  sidebarItemText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FFFFFF',
   },
   sidebarNavItem: {
     flexDirection: 'row',
@@ -133,9 +116,5 @@ const styles = StyleSheet.create({
   sidebarNavItemText: {
     fontSize: 14,
     fontWeight: '500',
-  },
-  sidebarDivider: {
-    height: 1,
-    marginVertical: 8,
   },
 });
